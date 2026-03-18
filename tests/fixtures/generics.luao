@@ -1,0 +1,47 @@
+class Stack<T>
+    private items: T[]
+    private count: number
+
+    new()
+        self.items = {}
+        self.count = 0
+    end
+
+    public function push(item: T): void
+        self.count = self.count + 1
+        self.items[self.count] = item
+    end
+
+    public function pop(): T
+        if self.count == 0 then
+            error("Stack is empty")
+        end
+        local item = self.items[self.count]
+        self.items[self.count] = nil
+        self.count = self.count - 1
+        return item
+    end
+
+    public function peek(): T
+        if self.count == 0 then
+            error("Stack is empty")
+        end
+        return self.items[self.count]
+    end
+
+    public function size(): number
+        return self.count
+    end
+
+    public function is_empty(): boolean
+        return self.count == 0
+    end
+end
+
+local stack = new Stack()
+stack:push(1)
+stack:push(2)
+stack:push(3)
+print(stack:pop())
+print(stack:peek())
+print(stack:size())

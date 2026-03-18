@@ -1,0 +1,45 @@
+class Animal
+    protected name: string
+
+    new(name: string)
+        self.name = name
+    end
+
+    public function speak(): string
+        return "..."
+    end
+end
+
+class Dog extends Animal
+    private breed: string
+
+    new(name: string, breed: string)
+        super.new(name)
+        self.breed = breed
+    end
+
+    override function speak(): string
+        return "Woof! My name is " .. self.name
+    end
+
+    public function get_breed(): string
+        return self.breed
+    end
+end
+
+class GoldenRetriever extends Dog
+    new(name: string)
+        super.new(name, "Golden Retriever")
+    end
+
+    override function speak(): string
+        return super.speak() .. " and I love everyone!"
+    end
+end
+
+local dog = new Dog("Rex", "German Shepherd")
+print(dog:speak())
+
+local goldie = new GoldenRetriever("Buddy")
+print(goldie:speak())
+print(goldie:get_breed())

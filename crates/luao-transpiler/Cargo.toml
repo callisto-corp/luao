@@ -1,0 +1,12 @@
+[package]
+name = "luao-transpiler"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+luao-lexer.workspace = true
+luao-parser.workspace = true
+luao-resolver.workspace = true
+luao-checker.workspace = true
+smol_str.workspace = true
+full_moon = "1"

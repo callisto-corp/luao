@@ -1,0 +1,71 @@
+{
+  "name": "luao",
+  "displayName": "Luao",
+  "description": "Luao language support - Lua with classes",
+  "version": "0.1.0",
+  "publisher": "luao",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:luao"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "luao",
+        "extensions": [
+          ".luao"
+        ],
+        "aliases": [
+          "Luao",
+          "luao"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "luao",
+        "scopeName": "source.luao",
+        "path": "./syntaxes/luao.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Luao",
+      "properties": {
+        "luao.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the luao binary. Leave empty to find it on PATH."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[luao]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false,
+        "editor.semanticHighlighting.enabled": true
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "tsc -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

@@ -1,0 +1,31 @@
+class MathUtils
+    static PI: number = 3.14159265358979
+    static E: number = 2.71828182845905
+
+    static function max(a: number, b: number): number
+        if a > b then
+            return a
+        end
+        return b
+    end
+
+    static function min(a: number, b: number): number
+        if a < b then
+            return a
+        end
+        return b
+    end
+
+    static function clamp(value: number, min_val: number, max_val: number): number
+        return MathUtils.max(min_val, MathUtils.min(value, max_val))
+    end
+
+    static function lerp(a: number, b: number, t: number): number
+        return a + (b - a) * t
+    end
+end
+
+print(MathUtils.PI)
+print(MathUtils.max(10, 20))
+print(MathUtils.clamp(15, 0, 10))
+print(MathUtils.lerp(0, 100, 0.5))

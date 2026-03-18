@@ -1,0 +1,18 @@
+[package]
+name = "luao-lsp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+luao-lexer.workspace = true
+luao-parser.workspace = true
+luao-resolver.workspace = true
+luao-checker.workspace = true
+luao-transpiler.workspace = true
+smol_str.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["full"] }
+dashmap = "6"
+ropey = "1"

@@ -1,0 +1,58 @@
+abstract class Shape
+    protected color: string
+
+    new(color: string)
+        self.color = color
+    end
+
+    abstract function area(): number
+    abstract function perimeter(): number
+
+    public function describe(): string
+        return self.color .. " shape with area " .. self:area()
+    end
+end
+
+class Rectangle extends Shape
+    private width: number
+    private height: number
+
+    new(width: number, height: number, color: string)
+        super.new(color)
+        self.width = width
+        self.height = height
+    end
+
+    override function area(): number
+        return self.width * self.height
+    end
+
+    override function perimeter(): number
+        return 2 * (self.width + self.height)
+    end
+end
+
+class Circle extends Shape
+    private radius: number
+
+    new(radius: number, color: string)
+        super.new(color)
+        self.radius = radius
+    end
+
+    override function area(): number
+        return 3.14159 * self.radius * self.radius
+    end
+
+    override function perimeter(): number
+        return 2 * 3.14159 * self.radius
+    end
+end
+
+local r = new Rectangle(10, 5, "red")
+print(r:describe())
+print(r:perimeter())
+
+local c = new Circle(7, "blue")
+print(c:describe())
+print(c:perimeter())

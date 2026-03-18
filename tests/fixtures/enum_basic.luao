@@ -1,0 +1,18 @@
+enum Direction
+    North = 1
+    South = 2
+    East = 3
+    West = 4
+end
+
+enum Color
+    Red
+    Green
+    Blue
+end
+
+local dir = Direction.North
+print(Direction._values[dir])
+
+local c = Color.Green
+print(Color._values[c])

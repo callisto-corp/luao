@@ -1,0 +1,189 @@
+{
+  "name": "Luao",
+  "scopeName": "source.luao",
+  "fileTypes": ["luao"],
+  "patterns": [
+    { "include": "#block-comment" },
+    { "include": "#line-comment" },
+    { "include": "#long-string" },
+    { "include": "#double-quoted-string" },
+    { "include": "#single-quoted-string" },
+    { "include": "#number" },
+    { "include": "#class-definition" },
+    { "include": "#interface-definition" },
+    { "include": "#enum-definition" },
+    { "include": "#function-definition" },
+    { "include": "#luao-keywords" },
+    { "include": "#lua-keywords" },
+    { "include": "#constants" },
+    { "include": "#type-annotation" },
+    { "include": "#operators" },
+    { "include": "#function-call" }
+  ],
+  "repository": {
+    "block-comment": {
+      "name": "comment.block.luao",
+      "begin": "--\\[\\[",
+      "end": "\\]\\]"
+    },
+    "line-comment": {
+      "name": "comment.line.double-dash.luao",
+      "match": "--.*$"
+    },
+    "long-string": {
+      "name": "string.quoted.other.multiline.luao",
+      "begin": "\\[\\[",
+      "end": "\\]\\]"
+    },
+    "double-quoted-string": {
+      "name": "string.quoted.double.luao",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.luao",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "single-quoted-string": {
+      "name": "string.quoted.single.luao",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        {
+          "name": "constant.character.escape.luao",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "number": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.luao",
+          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.luao",
+          "match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?\\b"
+        },
+        {
+          "name": "constant.numeric.float.luao",
+          "match": "\\b\\d+[eE][+-]?\\d+\\b"
+        },
+        {
+          "name": "constant.numeric.float.luao",
+          "match": "\\.\\d+([eE][+-]?\\d+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.luao",
+          "match": "\\b\\d+\\b"
+        }
+      ]
+    },
+    "class-definition": {
+      "match": "\\b(class)\\s+([a-zA-Z_]\\w*)(?:\\s+(extends)\\s+([a-zA-Z_]\\w*))?(?:\\s+(implements)\\s+([a-zA-Z_]\\w*))?",
+      "captures": {
+        "1": { "name": "keyword.declaration.class.luao" },
+        "2": { "name": "entity.name.type.class.luao" },
+        "3": { "name": "keyword.declaration.extends.luao" },
+        "4": { "name": "entity.other.inherited-class.luao" },
+        "5": { "name": "keyword.declaration.implements.luao" },
+        "6": { "name": "entity.other.inherited-class.luao" }
+      }
+    },
+    "interface-definition": {
+      "match": "\\b(interface)\\s+([a-zA-Z_]\\w*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.interface.luao" },
+        "2": { "name": "entity.name.type.interface.luao" }
+      }
+    },
+    "enum-definition": {
+      "match": "\\b(enum)\\s+([a-zA-Z_]\\w*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.enum.luao" },
+        "2": { "name": "entity.name.type.enum.luao" }
+      }
+    },
+    "function-definition": {
+      "match": "\\b(function)\\s+([a-zA-Z_]\\w*(?:[.:][a-zA-Z_]\\w*)*)",
+      "captures": {
+        "1": { "name": "keyword.control.luao" },
+        "2": { "name": "entity.name.function.luao" }
+      }
+    },
+    "luao-keywords": {
+      "match": "\\b(class|extends|implements|interface|abstract|static|public|private|protected|readonly|super|new|enum|sealed|get|set|override)\\b",
+      "name": "keyword.other.luao"
+    },
+    "lua-keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.luao",
+          "match": "\\b(and|break|do|else|elseif|end|for|goto|if|in|not|or|repeat|return|then|until|while)\\b"
+        },
+        {
+          "name": "keyword.declaration.luao",
+          "match": "\\b(local|function)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.true.luao",
+          "match": "\\btrue\\b"
+        },
+        {
+          "name": "constant.language.boolean.false.luao",
+          "match": "\\bfalse\\b"
+        },
+        {
+          "name": "constant.language.nil.luao",
+          "match": "\\bnil\\b"
+        },
+        {
+          "name": "variable.language.self.luao",
+          "match": "\\bself\\b"
+        }
+      ]
+    },
+    "type-annotation": {
+      "match": ":\\s*([a-zA-Z_]\\w*(?:\\[\\])?)",
+      "captures": {
+        "1": { "name": "support.type.luao" }
+      }
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arithmetic.luao",
+          "match": "\\+|-|\\*|/|%|\\^"
+        },
+        {
+          "name": "keyword.operator.comparison.luao",
+          "match": "==|~=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.assignment.luao",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.concatenation.luao",
+          "match": "\\.\\."
+        },
+        {
+          "name": "keyword.operator.length.luao",
+          "match": "#"
+        }
+      ]
+    },
+    "function-call": {
+      "match": "\\b([a-zA-Z_]\\w*(?:[.:][a-zA-Z_]\\w*)*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.call.luao" }
+      }
+    }
+  }
+}

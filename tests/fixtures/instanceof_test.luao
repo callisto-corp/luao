@@ -1,0 +1,27 @@
+class Animal
+    public name: string
+
+    new(name: string)
+        self.name = name
+    end
+end
+
+class Dog extends Animal
+    new(name: string)
+        super.new(name)
+    end
+end
+
+class Cat extends Animal
+    new(name: string)
+        super.new(name)
+    end
+end
+
+local dog = new Dog("Rex")
+local cat = new Cat("Whiskers")
+
+print(dog instanceof Animal)
+print(dog instanceof Dog)
+print(dog instanceof Cat)
+print(cat instanceof Animal)

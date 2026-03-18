@@ -1,0 +1,158 @@
+interface Serializable
+    function serialize(): string
+end
+
+enum AccountType
+    Checking = 1
+    Savings = 2
+    Investment = 3
+end
+
+abstract class Account implements Serializable
+    protected owner: string
+    protected balance: number
+    readonly account_type: AccountType
+
+    new(owner: string, balance: number, account_type: AccountType)
+        self.owner = owner
+        self.balance = balance
+        self.account_type = account_type
+    end
+
+    public function deposit(amount: number): void
+        if amount <= 0 then
+            error("Deposit amount must be positive")
+        end
+        self.balance = self.balance + amount
+    end
+
+    public function get_balance(): number
+        return self.balance
+    end
+
+    public function get_owner(): string
+        return self.owner
+    end
+
+    abstract function withdraw(amount: number): boolean
+    abstract function serialize(): string
+
+    public function __tostring(): string
+        return self.owner .. " | $" .. self.balance
+    end
+end
+
+class CheckingAccount extends Account
+    private overdraft_limit: number
+
+    new(owner: string, balance: number, overdraft_limit: number)
+        super.new(owner, balance, AccountType.Checking)
+        self.overdraft_limit = overdraft_limit
+    end
+
+    override function withdraw(amount: number): boolean
+        if amount <= 0 then
+            return false
+        end
+        if self.balance - amount < -self.overdraft_limit then
+            return false
+        end
+        self.balance = self.balance - amount
+        return true
+    end
+
+    override function serialize(): string
+        return "CHECKING:" .. self.owner .. ":" .. self.balance
+    end
+end
+
+class SavingsAccount extends Account
+    private interest_rate: number
+    private withdrawal_count: number
+    static MAX_WITHDRAWALS: number = 6
+
+    new(owner: string, balance: number, interest_rate: number)
+        super.new(owner, balance, AccountType.Savings)
+        self.interest_rate = interest_rate
+        self.withdrawal_count = 0
+    end
+
+    override function withdraw(amount: number): boolean
+        if amount <= 0 then
+            return false
+        end
+        if self.withdrawal_count >= SavingsAccount.MAX_WITHDRAWALS then
+            return false
+        end
+        if amount > self.balance then
+            return false
+        end
+        self.balance = self.balance - amount
+        self.withdrawal_count = self.withdrawal_count + 1
+        return true
+    end
+
+    public function apply_interest(): void
+        self.balance = self.balance + self.balance * self.interest_rate
+    end
+
+    override function serialize(): string
+        return "SAVINGS:" .. self.owner .. ":" .. self.balance .. ":" .. self.interest_rate
+    end
+end
+
+class Money
+    public dollars: number
+    public cents: number
+
+    new(dollars: number, cents: number)
+        self.dollars = dollars + (cents // 100)
+        self.cents = cents % 100
+    end
+
+    public function __add(other: Money): Money
+        return new Money(self.dollars + other.dollars, self.cents + other.cents)
+    end
+
+    public function __eq(other: Money): boolean
+        return self.dollars == other.dollars and self.cents == other.cents
+    end
+
+    public function __lt(other: Money): boolean
+        if self.dollars == other.dollars then
+            return self.cents < other.cents
+        end
+        return self.dollars < other.dollars
+    end
+
+    public function __tostring(): string
+        if self.cents < 10 then
+            return "$" .. self.dollars .. ".0" .. self.cents
+        end
+        return "$" .. self.dollars .. "." .. self.cents
+    end
+end
+
+local checking = new CheckingAccount("Alice", 1000, 500)
+local savings = new SavingsAccount("Bob", 5000, 0.05)
+
+checking:deposit(500)
+print(tostring(checking))
+
+checking:withdraw(2000)
+print("After withdrawal: $" .. checking:get_balance())
+
+savings:apply_interest()
+print(tostring(savings))
+print(savings:serialize())
+
+print(checking instanceof Account)
+print(checking instanceof CheckingAccount)
+print(checking instanceof SavingsAccount)
+
+print("Account type: " .. AccountType._values[AccountType.Checking])
+
+local a = new Money(10, 50)
+local b = new Money(5, 75)
+local c = a + b
+print(tostring(a) .. " + " .. tostring(b) .. " = " .. tostring(c))

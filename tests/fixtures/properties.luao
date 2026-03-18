@@ -1,0 +1,40 @@
+class Person
+    private _name: string
+    private _age: number
+
+    new(name: string, age: number)
+        self._name = name
+        self._age = age
+    end
+
+    public get name: string
+        return self._name
+    end
+
+    public set name(value: string)
+        if #value == 0 then
+            error("Name cannot be empty")
+        end
+        self._name = value
+    end
+
+    public get age: number
+        return self._age
+    end
+
+    public set age(value: number)
+        if value < 0 then
+            error("Age cannot be negative")
+        end
+        self._age = value
+    end
+
+    public function greet(): string
+        return "Hi, I'm " .. self._name .. " and I'm " .. self._age .. " years old"
+    end
+end
+
+local p = new Person("Alice", 30)
+print(p.name)
+p.name = "Bob"
+print(p:greet())

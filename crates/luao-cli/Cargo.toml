@@ -1,0 +1,19 @@
+[package]
+name = "luao-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "luao"
+path = "src/main.rs"
+
+[dependencies]
+luao-lexer.workspace = true
+luao-parser.workspace = true
+luao-resolver.workspace = true
+luao-checker.workspace = true
+luao-transpiler.workspace = true
+luao-lsp.workspace = true
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+tower-lsp = "0.20"

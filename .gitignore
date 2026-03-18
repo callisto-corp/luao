@@ -1,0 +1,7 @@
+target/
+node_modules/
+out/
+*.vsix
+*.lua
+!runtime/luao_runtime.lua
+!tests/expected/*.lua

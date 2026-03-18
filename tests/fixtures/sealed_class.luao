@@ -1,0 +1,18 @@
+sealed class DatabaseConfig
+    private host: string
+    private port: number
+    readonly name: string
+
+    new(host: string, port: number, name: string)
+        self.host = host
+        self.port = port
+        self.name = name
+    end
+
+    public function connection_string(): string
+        return self.host .. ":" .. self.port .. "/" .. self.name
+    end
+end
+
+local config = new DatabaseConfig("localhost", 5432, "mydb")
+print(config:connection_string())

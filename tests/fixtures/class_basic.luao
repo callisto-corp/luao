@@ -1,0 +1,21 @@
+class Animal
+    private name: string
+    public age: number
+
+    new(name: string, age: number)
+        self.name = name
+        self.age = age
+    end
+
+    public function get_name(): string
+        return self.name
+    end
+
+    public function speak(): string
+        return "..."
+    end
+end
+
+local a = new Animal("Rex", 5)
+print(a:get_name())
+print(a:speak())

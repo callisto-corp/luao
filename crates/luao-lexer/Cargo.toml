@@ -1,0 +1,8 @@
+[package]
+name = "luao-lexer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+smol_str.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "luao-resolver"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+luao-lexer.workspace = true
+luao-parser.workspace = true
+smol_str.workspace = true
+thiserror.workspace = true
