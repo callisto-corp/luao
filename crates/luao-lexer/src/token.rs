@@ -161,6 +161,38 @@ impl TokenKind {
         }
     }
 
+    /// Contextual keywords — reserved only in Luao syntactic positions,
+    /// usable as identifiers in plain Lua code (e.g. `type(f)`).
+    pub fn is_contextual_keyword(&self) -> bool {
+        matches!(
+            self,
+            TokenKind::Class
+                | TokenKind::Extends
+                | TokenKind::Implements
+                | TokenKind::Interface
+                | TokenKind::Abstract
+                | TokenKind::Static
+                | TokenKind::Public
+                | TokenKind::Private
+                | TokenKind::Protected
+                | TokenKind::Readonly
+                | TokenKind::Super
+                | TokenKind::New
+                | TokenKind::Enum
+                | TokenKind::Sealed
+                | TokenKind::Get
+                | TokenKind::Set
+                | TokenKind::Override
+                | TokenKind::Instanceof
+                | TokenKind::Extern
+                | TokenKind::As
+                | TokenKind::Type
+                | TokenKind::Import
+                | TokenKind::Export
+                | TokenKind::From
+        )
+    }
+
     pub fn is_keyword(&self) -> bool {
         matches!(
             self,

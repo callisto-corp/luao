@@ -3,6 +3,7 @@ use luao_parser::{AccessModifier, ClassDecl, ClassMember, Expression};
 use crate::emitter::Emitter;
 use crate::expression_emitter::emit_expression;
 
+
 pub fn emit_class(emitter: &mut Emitter, class: &ClassDecl) {
     let class_name = emitter.rename_decl(&class.name.name);
     let parent_name = class
@@ -206,8 +207,15 @@ fn emit_method(
     let params = emitter.emit_params(&method.params);
 
     let is_operator = original_name.starts_with("__");
+    let use_no_self = emitter.no_self && !method.is_static && !is_operator;
 
-    let params = if is_operator && !method.is_static {
+    let params = if use_no_self {
+        if params.is_empty() {
+            "self".to_string()
+        } else {
+            format!("self, {}", params)
+        }
+    } else if is_operator && !method.is_static {
         if params.is_empty() {
             "self".to_string()
         } else {
@@ -218,17 +226,11 @@ fn emit_method(
     };
 
     if method.is_abstract && method.body.is_none() {
-        if method.is_static || is_operator {
-            emitter.writeln(&format!(
-                "function {}.{}({})",
-                class_name, method_name, params
-            ));
-        } else {
-            emitter.writeln(&format!(
-                "function {}:{}({})",
-                class_name, method_name, params
-            ));
-        }
+        // Abstract methods always use `.` since they just error
+        emitter.writeln(&format!(
+            "function {}.{}({})",
+            class_name, method_name, params
+        ));
         emitter.indent();
         emitter.writeln(&format!(
             "error(\"Abstract method '{}' must be implemented\")",
@@ -240,7 +242,7 @@ fn emit_method(
         return;
     }
 
-    if method.is_static || is_operator {
+    if method.is_static || is_operator || use_no_self {
         emitter.writeln(&format!(
             "function {}.{}({})",
             class_name, method_name, params

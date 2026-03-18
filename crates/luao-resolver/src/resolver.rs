@@ -5,7 +5,7 @@ use luao_parser::{
 
 use crate::scope::{Scope, ScopeKind};
 use crate::symbol::{
-    ClassSymbol, EnumSymbol, FieldSymbol, InterfaceSymbol, MethodSymbol, SymbolTable,
+    ClassSymbol, EnumSymbol, EnumVariantSymbol, FieldSymbol, InterfaceSymbol, MethodSymbol, SymbolTable,
 };
 use crate::types::LuaoType;
 
@@ -194,7 +194,7 @@ impl Resolver {
                     is_static: false,
                     is_abstract: true,
                     is_override: false,
-                    is_extern: false,
+                    is_extern: m.is_extern,
                 }
             })
             .collect();
@@ -225,7 +225,11 @@ impl Resolver {
                         None
                     }
                 });
-                (v.name.name.to_string(), value)
+                EnumVariantSymbol {
+                    name: v.name.name.to_string(),
+                    value,
+                    is_extern: v.is_extern,
+                }
             })
             .collect();
 

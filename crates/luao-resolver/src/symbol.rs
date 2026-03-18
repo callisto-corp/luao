@@ -57,7 +57,14 @@ pub struct InterfaceSymbol {
 pub struct EnumSymbol {
     pub id: SymbolId,
     pub name: String,
-    pub variants: Vec<(String, Option<i64>)>,
+    pub variants: Vec<EnumVariantSymbol>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumVariantSymbol {
+    pub name: String,
+    pub value: Option<i64>,
+    pub is_extern: bool,
 }
 
 #[derive(Debug, Clone)]

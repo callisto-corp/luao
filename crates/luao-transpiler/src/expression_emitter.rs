@@ -53,7 +53,8 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
                     if let Some(class_name) = emitter.current_class.clone() {
                         let prop_key = (class_name, fa.field.name.to_string());
                         if let Some(getter_method) = emitter.property_getters.get(&prop_key).cloned() {
-                            return format!("self:{}()", getter_method);
+                            let self_name = emitter.rename("self");
+                            return format!("{}:{}()", self_name, getter_method);
                         }
                     }
                 }
@@ -166,8 +167,11 @@ fn maybe_mangle_access(emitter: &mut Emitter, object: &Expression, member_name: 
             return emitter.mangle_member(&type_name, member_name);
         }
 
-        // EnumName.Variant → mangle using that enum (enums don't have extern)
+        // EnumName.Variant → mangle using that enum
         if emitter.is_enum(name) {
+            if is_extern_member(&emitter.symbol_table, name, member_name) {
+                return member_name.to_string();
+            }
             let type_name = name.to_string();
             return emitter.mangle_member(&type_name, member_name);
         }
@@ -176,9 +180,9 @@ fn maybe_mangle_access(emitter: &mut Emitter, object: &Expression, member_name: 
     member_name.to_string()
 }
 
-/// Check if a member of a class is marked as `extern` in the symbol table.
-fn is_extern_member(symbol_table: &luao_resolver::SymbolTable, class_name: &str, member_name: &str) -> bool {
-    if let Some(class) = symbol_table.classes.get(class_name) {
+/// Check if a member of a class or interface is marked as `extern` in the symbol table.
+fn is_extern_member(symbol_table: &luao_resolver::SymbolTable, type_name: &str, member_name: &str) -> bool {
+    if let Some(class) = symbol_table.classes.get(type_name) {
         for field in &class.fields {
             if field.name == member_name {
                 return field.is_extern;
@@ -187,6 +191,20 @@ fn is_extern_member(symbol_table: &luao_resolver::SymbolTable, class_name: &str,
         for method in &class.methods {
             if method.name == member_name {
                 return method.is_extern;
+            }
+        }
+    }
+    if let Some(iface) = symbol_table.interfaces.get(type_name) {
+        for method in &iface.methods {
+            if method.name == member_name {
+                return method.is_extern;
+            }
+        }
+    }
+    if let Some(enum_sym) = symbol_table.enums.get(type_name) {
+        for variant in &enum_sym.variants {
+            if variant.name == member_name {
+                return variant.is_extern;
             }
         }
     }

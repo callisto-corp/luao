@@ -139,6 +139,7 @@ pub struct InterfaceMethod {
     pub type_params: Vec<TypeParam>,
     pub params: Vec<Parameter>,
     pub return_type: Option<TypeAnnotation>,
+    pub is_extern: bool,
     pub span: Span,
 }
 
@@ -153,6 +154,7 @@ pub struct EnumDecl {
 pub struct EnumVariant {
     pub name: Identifier,
     pub value: Option<Expression>,
+    pub is_extern: bool,
     pub span: Span,
 }
 

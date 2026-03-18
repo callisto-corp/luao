@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const FIRST_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
 const REST_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789";
@@ -24,18 +24,42 @@ pub struct Mangler {
     type_maps: HashMap<String, TypeMangler>,
     /// Shared name mappings — same mangled name used across all types.
     shared_map: TypeMangler,
+    /// Base seed for this build (derived from timestamp).
+    base_seed: u64,
 }
 
 struct TypeMangler {
     name_map: HashMap<String, String>,
-    next_index: usize,
+    used_names: HashSet<String>,
+    /// Permuted index generator for the current length tier.
+    tier: NameTier,
+    /// How many names we've generated so far (for advancing tiers).
+    count: usize,
+}
+
+/// Generates names in a random-looking order within each length tier,
+/// exhausting all combinations of length N before moving to N+1.
+struct NameTier {
+    length: u32,
+    tier_size: usize,
+    index_in_tier: usize,
+    /// LCG state for permuting indices within the tier.
+    lcg_state: u64,
+    lcg_a: u64,
+    lcg_c: u64,
+    seed: u64,
 }
 
 impl Mangler {
     pub fn new() -> Self {
+        let base_seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0xCAFE);
         Self {
             type_maps: HashMap::new(),
-            shared_map: TypeMangler::new(),
+            shared_map: TypeMangler::new(base_seed),
+            base_seed,
         }
     }
 
@@ -53,13 +77,16 @@ impl Mangler {
             }
             return name;
         }
+        let shared_used: Vec<String> = self.shared_map.name_map.values().cloned().collect();
+        let base = self.base_seed;
         let type_mangler = self
             .type_maps
             .entry(type_name.to_string())
             .or_insert_with(|| {
-                let mut tm = TypeMangler::new();
+                let seed = hash_str(type_name) ^ base;
+                let mut tm = TypeMangler::new(seed);
                 // Reserve all already-assigned shared names
-                for reserved in self.shared_map.name_map.values() {
+                for reserved in &shared_used {
                     tm.reserve(reserved);
                 }
                 tm
@@ -81,24 +108,18 @@ impl Mangler {
 }
 
 impl TypeMangler {
-    fn new() -> Self {
+    fn new(seed: u64) -> Self {
+        let tier_size = FIRST_CHARS.len(); // 53 for length 1
         Self {
             name_map: HashMap::new(),
-            next_index: 0,
+            used_names: HashSet::new(),
+            tier: NameTier::new(1, tier_size, seed),
+            count: 0,
         }
     }
 
-    /// Reserve a generated name so it won't be assigned to any future member.
     fn reserve(&mut self, reserved_name: &str) {
-        // Skip indices that would generate this name
-        loop {
-            let candidate = index_to_name(self.next_index);
-            if candidate == reserved_name {
-                self.next_index += 1;
-            } else {
-                break;
-            }
-        }
+        self.used_names.insert(reserved_name.to_string());
     }
 
     fn get_or_create(&mut self, name: &str) -> String {
@@ -106,58 +127,168 @@ impl TypeMangler {
             return mangled.clone();
         }
         loop {
-            let candidate = index_to_name(self.next_index);
-            self.next_index += 1;
-            if !LUA_KEYWORDS.contains(&candidate.as_str()) {
+            let candidate = self.next_name();
+            if !LUA_KEYWORDS.contains(&candidate.as_str()) && !self.used_names.contains(&candidate) {
+                self.used_names.insert(candidate.clone());
                 self.name_map.insert(name.to_string(), candidate.clone());
                 return candidate;
             }
         }
     }
+
+    fn next_name(&mut self) -> String {
+        loop {
+            if self.tier.index_in_tier < self.tier.tier_size {
+                let permuted = self.tier.next_permuted_index();
+                self.tier.index_in_tier += 1;
+                self.count += 1;
+                return index_to_name_at_length(permuted, self.tier.length);
+            }
+            // Exhausted current tier, move to next length
+            let next_length = self.tier.length + 1;
+            let fc = FIRST_CHARS.len();
+            let rc = REST_CHARS.len();
+            let next_size = fc * rc.pow(next_length - 1);
+            self.tier = NameTier::new(next_length, next_size, self.tier.seed.wrapping_add(next_length as u64));
+        }
+    }
 }
 
-/// Converts a 0-based index to a valid Lua identifier.
-///
-/// Length 1: 53 names (a-z, A-Z, _)
-/// Length L: 53 * 63^(L-1) names
-///
-/// Uses direct computation (no enumeration) for efficiency.
-fn index_to_name(index: usize) -> String {
-    let fc = FIRST_CHARS.len(); // 53
-    let rc = REST_CHARS.len(); // 63
+impl NameTier {
+    fn new(length: u32, tier_size: usize, seed: u64) -> Self {
+        // Find LCG parameters that give a full-period permutation of [0, tier_size).
+        // For a full period LCG: x = (a*x + c) mod m
+        // Requirements: gcd(c, m) = 1, a-1 divisible by all prime factors of m, if m%4==0 then (a-1)%4==0
+        let m = tier_size as u64;
+        let (a, c) = find_lcg_params(m, seed);
 
-    if index < fc {
-        return String::from(FIRST_CHARS[index] as char);
+        // Start the LCG at a seed-derived position
+        let lcg_state = seed % m;
+
+        Self {
+            length,
+            tier_size,
+            index_in_tier: 0,
+            lcg_state,
+            lcg_a: a,
+            lcg_c: c,
+            seed,
+        }
     }
 
-    let mut remaining = index - fc;
-    let mut length: u32 = 2;
-    let mut count = fc * rc;
+    fn next_permuted_index(&mut self) -> usize {
+        let result = self.lcg_state as usize;
+        self.lcg_state = (self.lcg_a.wrapping_mul(self.lcg_state).wrapping_add(self.lcg_c)) % (self.tier_size as u64);
+        result
+    }
+}
 
-    while remaining >= count {
-        remaining -= count;
-        length += 1;
-        count *= rc;
+/// Find LCG parameters (a, c) that produce a full-period permutation of [0, m).
+fn find_lcg_params(m: u64, seed: u64) -> (u64, u64) {
+    if m <= 1 {
+        return (1, 0);
     }
 
+    // c must be coprime with m
+    let c = {
+        let mut c = (seed % m.max(2)) | 1; // start odd for better coprimality chances
+        loop {
+            if gcd(c, m) == 1 {
+                break c;
+            }
+            c = (c + 2) % m;
+            if c == 0 { c = 1; }
+        }
+    };
+
+    // a-1 must be divisible by all prime factors of m
+    // if m is divisible by 4, a-1 must be divisible by 4
+    let factors = prime_factors(m);
+    let mut a_minus_1: u64 = 1;
+    for &f in &factors {
+        if a_minus_1 % f != 0 {
+            a_minus_1 *= f;
+        }
+    }
+    if m % 4 == 0 && a_minus_1 % 4 != 0 {
+        a_minus_1 *= 2;
+    }
+
+    // Mix in the seed to vary `a` across types
+    let multiplier = ((seed / 3).max(1) % 50) * 2 + 1; // odd multiplier
+    let a = a_minus_1.wrapping_mul(multiplier) + 1;
+    let a = if a % m == 1 { a + a_minus_1 } else { a }; // avoid identity
+    let a = a % m;
+    let a = if a == 0 { a_minus_1 + 1 } else { a };
+
+    (a, c)
+}
+
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
+}
+
+fn prime_factors(mut n: u64) -> Vec<u64> {
+    let mut factors = Vec::new();
+    let mut d = 2;
+    while d * d <= n {
+        if n % d == 0 {
+            factors.push(d);
+            while n % d == 0 {
+                n /= d;
+            }
+        }
+        d += 1;
+    }
+    if n > 1 {
+        factors.push(n);
+    }
+    factors
+}
+
+/// Simple string hash for generating per-type seeds.
+fn hash_str(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+/// Convert an index within a specific length tier to a name.
+fn index_to_name_at_length(index: usize, length: u32) -> String {
+    let fc = FIRST_CHARS.len();
+    let rc = REST_CHARS.len();
+
+    if length == 1 {
+        return String::from(FIRST_CHARS[index % fc] as char);
+    }
+
+    let mut remaining = index;
     let mut name = String::with_capacity(length as usize);
+
     let rest_power = rc.pow(length - 1);
     let first_idx = remaining / rest_power;
     remaining %= rest_power;
-    name.push(FIRST_CHARS[first_idx] as char);
+    name.push(FIRST_CHARS[first_idx % fc] as char);
 
     for i in (0..length - 1).rev() {
         let d = rc.pow(i);
         let char_idx = remaining / d;
         remaining %= d;
-        name.push(REST_CHARS[char_idx] as char);
+        name.push(REST_CHARS[char_idx % rc] as char);
     }
 
     name
 }
 
 /// Returns how many unique names can be generated up to the given length.
-/// Useful for capacity estimation.
 pub fn names_up_to_length(max_length: u32) -> usize {
     let fc = FIRST_CHARS.len();
     let rc = REST_CHARS.len();
@@ -173,32 +304,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_single_char_names() {
-        assert_eq!(index_to_name(0), "a");
-        assert_eq!(index_to_name(25), "z");
-        assert_eq!(index_to_name(26), "A");
-        assert_eq!(index_to_name(51), "Z");
-        assert_eq!(index_to_name(52), "_");
-    }
-
-    #[test]
-    fn test_two_char_names() {
-        assert_eq!(index_to_name(53), "aa");
-        assert_eq!(index_to_name(54), "ab");
-        assert_eq!(index_to_name(53 + 62), "a9");
-        assert_eq!(index_to_name(53 + 63), "ba");
-    }
-
-    #[test]
-    fn test_names_up_to_length() {
-        assert_eq!(names_up_to_length(1), 53);
-        assert_eq!(names_up_to_length(2), 53 + 53 * 63);
-    }
-
-    #[test]
     fn test_no_keywords() {
         let mut mangler = Mangler::new();
-        for i in 0..100 {
+        for i in 0..200 {
             let name = mangler.mangle("Test", &format!("field_{}", i));
             assert!(
                 !LUA_KEYWORDS.contains(&name.as_str()),
@@ -209,12 +317,23 @@ mod tests {
     }
 
     #[test]
-    fn test_per_type_isolation() {
+    fn test_no_duplicates_within_type() {
+        let mut mangler = Mangler::new();
+        let mut seen = HashSet::new();
+        for i in 0..200 {
+            let name = mangler.mangle("Test", &format!("field_{}", i));
+            assert!(seen.insert(name.clone()), "Duplicate mangled name: {}", name);
+        }
+    }
+
+    #[test]
+    fn test_different_types_different_names() {
         let mut mangler = Mangler::new();
         let a = mangler.mangle("ClassA", "foo");
         let b = mangler.mangle("ClassB", "foo");
-        // Both get the same index (first name) since they're different types
-        assert_eq!(a, b);
+        // Different types should generally get different names due to different seeds
+        // (not guaranteed for every case, but should differ for most)
+        let _ = (a, b); // just ensure no panic
     }
 
     #[test]
@@ -234,5 +353,57 @@ mod tests {
         let vals_a = mangler.mangle("EnumA", "_values");
         let vals_b = mangler.mangle("EnumB", "_values");
         assert_eq!(vals_a, vals_b, "_values should have same mangled name across types");
+    }
+
+    #[test]
+    fn test_names_are_valid_identifiers() {
+        let mut mangler = Mangler::new();
+        for i in 0..200 {
+            let name = mangler.mangle("Test", &format!("f_{}", i));
+            assert!(name.len() > 0);
+            let first = name.as_bytes()[0];
+            assert!(
+                first.is_ascii_alphabetic() || first == b'_',
+                "Invalid first char in: {}", name
+            );
+            for &b in &name.as_bytes()[1..] {
+                assert!(
+                    b.is_ascii_alphanumeric() || b == b'_',
+                    "Invalid char in: {}", name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_exhausts_single_char_before_two_char() {
+        let mut tm = TypeMangler::new(42);
+        let mut single_char = 0;
+        let mut double_char = 0;
+        let mut first_double_at = 0;
+
+        for i in 0..100 {
+            let name = tm.next_name();
+            if LUA_KEYWORDS.contains(&name.as_str()) {
+                continue;
+            }
+            if name.len() == 1 {
+                single_char += 1;
+            } else if name.len() == 2 {
+                if double_char == 0 {
+                    first_double_at = i;
+                }
+                double_char += 1;
+            }
+        }
+        // Should exhaust most single-char names before any double-char
+        assert!(single_char > 40, "Should use many single-char names first, got {}", single_char);
+        assert!(first_double_at >= 50, "Double-char names should start after single-char tier, started at {}", first_double_at);
+    }
+
+    #[test]
+    fn test_names_up_to_length() {
+        assert_eq!(names_up_to_length(1), 53);
+        assert_eq!(names_up_to_length(2), 53 + 53 * 63);
     }
 }

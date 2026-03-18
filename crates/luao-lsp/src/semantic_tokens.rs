@@ -95,8 +95,8 @@ fn classify_identifier(doc: &DocumentState, token: &luao_lexer::Token) -> u32 {
             return TOKEN_TYPE_ENUM;
         }
         for en in sym_table.enums.values() {
-            for (variant_name, _) in &en.variants {
-                if variant_name == name {
+            for variant in &en.variants {
+                if variant.name == name {
                     return TOKEN_TYPE_ENUM_MEMBER;
                 }
             }

@@ -5,12 +5,7 @@ pub fn format_lua(source: &str) -> String {
     }
 }
 
-/// Minifies Lua source by stripping indentation and blank lines.
-pub fn minify_lua(source: &str) -> String {
-    source
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+/// Minifies Lua source: renames local variables to short names and strips whitespace/comments.
+pub fn minify_lua(source: &str, no_self: bool) -> String {
+    crate::minifier::minify_with_options(source, no_self)
 }

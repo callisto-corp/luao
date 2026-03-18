@@ -13,7 +13,11 @@ pub fn emit_enum(emitter: &mut Emitter, enum_decl: &EnumDecl) {
 
     for variant in &enum_decl.variants {
         let original_name = variant.name.name.to_string();
-        let output_name = emitter.mangle_member(&name, &original_name);
+        let output_name = if variant.is_extern {
+            original_name.clone()
+        } else {
+            emitter.mangle_member(&name, &original_name)
+        };
         let value = if let Some(expr) = &variant.value {
             let val_str = emit_expression(emitter, expr);
             if let luao_parser::Expression::Number(n, _) = expr {

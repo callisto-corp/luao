@@ -26,6 +26,9 @@ enum Commands {
         /// Skip bundling (don't resolve imports)
         #[arg(long)]
         no_bundle: bool,
+        /// Use explicit self parameter in method definitions instead of : syntax
+        #[arg(long)]
+        no_self: bool,
     },
     Check {
         path: String,
@@ -44,8 +47,9 @@ async fn main() {
             minify,
             mangle,
             no_bundle,
+            no_self,
         } => {
-            let options = TranspileOptions { minify, mangle };
+            let options = TranspileOptions { minify, mangle, no_self };
             build(&path, output.as_deref(), no_bundle, &options);
         }
         Commands::Check { path } => check(&path),

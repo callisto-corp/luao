@@ -5,6 +5,7 @@ pub mod enum_emitter;
 pub mod expression_emitter;
 pub mod formatter;
 pub mod mangler;
+pub mod minifier;
 pub mod runtime;
 pub mod statement_emitter;
 
@@ -14,6 +15,7 @@ pub use emitter::Emitter;
 pub struct TranspileOptions {
     pub minify: bool,
     pub mangle: bool,
+    pub no_self: bool,
 }
 
 pub fn transpile(source: &str) -> Result<String, Vec<String>> {
@@ -46,10 +48,11 @@ pub fn transpile_with_options(
         None
     };
     let mut emitter = Emitter::new(symbol_table, mangler);
+    emitter.no_self = options.no_self;
     emitter.emit(&ast);
     let lua_source = emitter.output();
     if options.minify {
-        Ok(formatter::minify_lua(&lua_source))
+        Ok(formatter::minify_lua(&lua_source, options.no_self))
     } else {
         Ok(formatter::format_lua(&lua_source))
     }

@@ -57,7 +57,7 @@ pub fn hover_info(doc: &DocumentState, position: Position) -> Option<Hover> {
         }
 
         if let Some(en) = sym_table.lookup_enum(&word) {
-            let variants: Vec<_> = en.variants.iter().map(|(n, _)| n.as_str()).collect();
+            let variants: Vec<_> = en.variants.iter().map(|v| v.name.as_str()).collect();
             let info = format!(
                 "**enum {}**\n\nVariants: {}",
                 en.name,

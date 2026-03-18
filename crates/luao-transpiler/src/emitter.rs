@@ -31,6 +31,10 @@ pub struct Emitter {
     pub(crate) property_getters: HashMap<(String, String), String>,
     /// Properties with setters: (class_name, prop_name) → setter method name
     pub(crate) property_setters: HashMap<(String, String), String>,
+    /// When true, methods use `.` with explicit self param instead of `:`
+    pub(crate) no_self: bool,
+    /// The name used for the self parameter when no_self is enabled
+    pub(crate) self_param_name: Option<String>,
 }
 
 impl Emitter {
@@ -49,6 +53,8 @@ impl Emitter {
             import_aliases: HashMap::new(),
             property_getters: HashMap::new(),
             property_setters: HashMap::new(),
+            no_self: false,
+            self_param_name: None,
         }
     }
 
@@ -188,6 +194,11 @@ impl Emitter {
 
     /// Apply rename map for references (checks import aliases first, then local renames).
     pub fn rename(&self, name: &str) -> String {
+        if name == "self" {
+            if let Some(ref self_name) = self.self_param_name {
+                return self_name.clone();
+            }
+        }
         if let Some(alias_target) = self.import_aliases.get(name) {
             return alias_target.clone();
         }

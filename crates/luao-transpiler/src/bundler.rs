@@ -161,44 +161,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
         alias_maps.insert(path.clone(), alias_map);
     }
 
-    // Phase 6: Detect circular file dependencies for forward declarations
-    let file_deps = build_file_deps(&modules, &sorted_files, &entry_canonical)?;
-    let circular_files = detect_circular_files(&file_deps);
-
-    // Collect forward declaration names (only for circular deps), using final renamed names
-    let mut forward_decl_names: Vec<String> = Vec::new();
-    for path in &circular_files {
-        if let Some(module) = modules.get(path) {
-            for name in &module.exports {
-                let final_name = export_rename_map
-                    .get(&(path.clone(), name.clone()))
-                    .cloned()
-                    .unwrap_or_else(|| name.clone());
-                if !forward_decl_names.contains(&final_name) {
-                    forward_decl_names.push(final_name);
-                }
-            }
-        }
-    }
-
-    // Phase 7: Transpile each module
-    let exported_set: HashSet<String> = if !forward_decl_names.is_empty() {
-        forward_decl_names.iter().cloned().collect()
-    } else {
-        HashSet::new()
-    };
-
-    let mut runtime_needs_instanceof = false;
-    let mut runtime_needs_enum_freeze = false;
-    let mut file_outputs: Vec<(PathBuf, String)> = Vec::new();
-
-    // Shared mangler across all files in the bundle so cross-file references resolve correctly
-    let mut shared_mangler: Option<Mangler> = if options.mangle {
-        Some(Mangler::new())
-    } else {
-        None
-    };
-
+    // Phase 6: Transpile each statement individually, then reorder across files.
     // Merge all symbol tables for cross-file type resolution (needed for mangling)
     let mut merged_symbols = luao_resolver::SymbolTable::new();
     for path in &sorted_files {
@@ -214,54 +177,177 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
         }
     }
 
+    // Shared mangler across all files in the bundle so cross-file references resolve correctly
+    let mut shared_mangler: Option<Mangler> = if options.mangle {
+        Some(Mangler::new())
+    } else {
+        None
+    };
+
+    // Transpile each statement individually, collecting metadata
+    #[allow(dead_code)]
+    struct EmittedItem {
+        code: String,
+        /// Names this item defines (class name, local var name, etc.)
+        defines: Vec<String>,
+        /// Names this item uses (identifiers referenced in the statement)
+        uses: Vec<String>,
+        /// Original position: (file_index, statement_index)
+        file_idx: usize,
+        stmt_idx: usize,
+        needs_instanceof: bool,
+        needs_enum_freeze: bool,
+    }
+
+    let mut items: Vec<EmittedItem> = Vec::new();
+
+    // Build import alias resolution: for each file, map alias → final export name
+    // so we can resolve uses through imports
+    let mut file_import_resolution: HashMap<PathBuf, HashMap<String, String>> = HashMap::new();
     for path in &sorted_files {
+        let module = &modules[path];
+        let mut resolution = HashMap::new();
+        for import in &module.imports {
+            let dep_path = resolve_import_path(&module.path, &import.path)?;
+            for (name, alias) in &import.names {
+                let final_name = export_rename_map
+                    .get(&(dep_path.clone(), name.clone()))
+                    .cloned()
+                    .unwrap_or_else(|| name.clone());
+                resolution.insert(alias.clone(), final_name);
+            }
+        }
+        file_import_resolution.insert(path.clone(), resolution);
+    }
+
+    for (file_idx, path) in sorted_files.iter().enumerate() {
         let module = &modules[path];
         let rename_map = file_rename_maps.get(path).cloned().unwrap_or_default();
         let alias_map = alias_maps.get(path).cloned().unwrap_or_default();
+        let import_res = file_import_resolution.get(path).cloned().unwrap_or_default();
 
-        // Take the shared mangler for this file, put it back after
-        let mangler = shared_mangler.take();
-        let mut emitter = crate::Emitter::new(merged_symbols.clone(), mangler);
-
-        // Forward-declared exported names skip `local`
-        if circular_files.contains(path) {
-            emitter.exported_names = exported_set.clone();
-        }
-
-        // Set rename maps separately: local renames for declarations, import aliases for references
-        emitter.local_renames = rename_map;
-        emitter.import_aliases = alias_map;
-
-        // Emit statements, skipping imports and unwrapping exports
-        for stmt in &module.ast.statements {
-            match stmt {
+        for (stmt_idx, stmt) in module.ast.statements.iter().enumerate() {
+            // Skip imports
+            let actual_stmt = match stmt {
                 luao_parser::Statement::ImportDecl(_) => continue,
-                luao_parser::Statement::ExportDecl(inner, _) => {
-                    emitter.emit_statement(inner);
+                luao_parser::Statement::ExportDecl(inner, _) => inner.as_ref(),
+                // Skip type-only statements
+                luao_parser::Statement::InterfaceDecl(_) | luao_parser::Statement::TypeAlias(_) => continue,
+                other => other,
+            };
+
+            // Figure out what names this statement defines
+            let defines = get_statement_defines(actual_stmt, &rename_map);
+
+            // Figure out what names this statement uses (resolve through imports)
+            let raw_uses = get_statement_uses(actual_stmt);
+            let uses: Vec<String> = raw_uses.into_iter().map(|u| {
+                // Resolve through import aliases
+                if let Some(resolved) = import_res.get(&u) {
+                    resolved.clone()
+                } else if let Some(renamed) = rename_map.get(&u) {
+                    renamed.clone()
+                } else {
+                    u
                 }
-                _ => {
-                    emitter.emit_statement(stmt);
+            }).collect();
+
+            // Transpile this single statement
+            let mangler = shared_mangler.take();
+            let mut emitter = crate::Emitter::new(merged_symbols.clone(), mangler);
+            emitter.no_self = options.no_self;
+            emitter.local_renames = rename_map.clone();
+            emitter.import_aliases = alias_map.clone();
+
+            emitter.emit_statement(actual_stmt);
+
+            let code = std::mem::take(&mut emitter.output);
+            let needs_instanceof = emitter.needs_instanceof;
+            let needs_enum_freeze = emitter.needs_enum_freeze;
+            shared_mangler = emitter.mangler.take();
+
+            if code.trim().is_empty() { continue; }
+
+            items.push(EmittedItem {
+                code,
+                defines,
+                uses,
+                file_idx,
+                stmt_idx,
+                needs_instanceof,
+                needs_enum_freeze,
+            });
+        }
+    }
+
+    // Phase 7: Reorder items so each item comes after the items it depends on.
+    // Only reorder when necessary — preserve original order as much as possible.
+    let mut ordered: Vec<usize> = Vec::with_capacity(items.len());
+    let mut emitted: HashSet<usize> = HashSet::new();
+    let mut emitting: HashSet<usize> = HashSet::new(); // cycle detection
+
+    // Build a map: defined name → item index
+    let mut name_to_item: HashMap<String, usize> = HashMap::new();
+    for (idx, item) in items.iter().enumerate() {
+        for name in &item.defines {
+            name_to_item.insert(name.clone(), idx);
+        }
+    }
+
+    fn emit_item(
+        idx: usize,
+        items: &[EmittedItem],
+        name_to_item: &HashMap<String, usize>,
+        emitted: &mut HashSet<usize>,
+        emitting: &mut HashSet<usize>,
+        ordered: &mut Vec<usize>,
+        forward_decls: &mut Vec<String>,
+    ) {
+        if emitted.contains(&idx) { return; }
+        if emitting.contains(&idx) {
+            // True circular dependency — forward declare all names this item defines
+            for name in &items[idx].defines {
+                if !forward_decls.contains(name) {
+                    forward_decls.push(name.clone());
+                }
+            }
+            return;
+        }
+        emitting.insert(idx);
+
+        // Pull in dependencies first
+        for used_name in &items[idx].uses {
+            if let Some(&dep_idx) = name_to_item.get(used_name) {
+                if dep_idx != idx && !emitted.contains(&dep_idx) {
+                    emit_item(dep_idx, items, name_to_item, emitted, emitting, ordered, forward_decls);
                 }
             }
         }
 
-        if emitter.needs_instanceof {
-            runtime_needs_instanceof = true;
+        emitting.remove(&idx);
+        if !emitted.contains(&idx) {
+            emitted.insert(idx);
+            ordered.push(idx);
         }
-        if emitter.needs_enum_freeze {
-            runtime_needs_enum_freeze = true;
-        }
+    }
 
-        let output = std::mem::take(&mut emitter.output);
-        // Return the shared mangler for the next file
-        shared_mangler = emitter.mangler.take();
-        file_outputs.push((path.clone(), output));
+    let mut forward_decl_names: Vec<String> = Vec::new();
+
+    // Process items in their original order — only pull deps up when needed
+    for idx in 0..items.len() {
+        emit_item(idx, &items, &name_to_item, &mut emitted, &mut emitting, &mut ordered, &mut forward_decl_names);
     }
 
     // Phase 8: Assemble the bundle
+    let mut runtime_needs_instanceof = false;
+    let mut runtime_needs_enum_freeze = false;
+    for &idx in &ordered {
+        if items[idx].needs_instanceof { runtime_needs_instanceof = true; }
+        if items[idx].needs_enum_freeze { runtime_needs_enum_freeze = true; }
+    }
+
     let mut bundle = String::new();
 
-    // Runtime functions (once at top)
     if runtime_needs_instanceof {
         bundle.push_str(crate::runtime::INSTANCEOF_FN);
         bundle.push_str("\n\n");
@@ -271,13 +357,25 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
         bundle.push_str("\n\n");
     }
 
-    // Forward declarations for circular dependencies only
+    // Forward declarations only for true circular dependencies
     if !forward_decl_names.is_empty() {
         bundle.push_str(&format!("local {}\n\n", forward_decl_names.join(", ")));
+        // Strip `local` from items that define forward-declared names
+        let fwd_set: HashSet<String> = forward_decl_names.iter().cloned().collect();
+        for item in &mut items {
+            let needs_strip: Vec<String> = item.defines.iter()
+                .filter(|n| fwd_set.contains(n.as_str()))
+                .cloned()
+                .collect();
+            for name in needs_strip {
+                item.code = item.code.replacen(&format!("local {} ", name), &format!("{} ", name), 1);
+                item.code = item.code.replacen(&format!("local {}\n", name), &format!("{}\n", name), 1);
+            }
+        }
     }
 
-    // Emit each module's code flat (no do...end wrapping)
-    for (_, code) in &file_outputs {
+    for &idx in &ordered {
+        let code = &items[idx].code;
         if !code.trim().is_empty() {
             bundle.push_str(code);
             if !bundle.ends_with('\n') {
@@ -290,7 +388,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
     let bundle = bundle_requires(&bundle, &entry_canonical)?;
 
     if options.minify {
-        Ok(formatter::minify_lua(&bundle))
+        Ok(formatter::minify_lua(&bundle, options.no_self))
     } else {
         Ok(formatter::format_lua(&bundle))
     }
@@ -499,7 +597,231 @@ fn collect_exported_names(stmt: &luao_parser::Statement, exports: &mut Vec<Strin
         luao_parser::Statement::EnumDecl(ed) => {
             exports.push(ed.name.name.to_string());
         }
-        luao_parser::Statement::InterfaceDecl(_) | luao_parser::Statement::TypeAlias(_) => {}
+        luao_parser::Statement::InterfaceDecl(id) => {
+            exports.push(id.name.name.to_string());
+        }
+        luao_parser::Statement::TypeAlias(ta) => {
+            exports.push(ta.name.name.to_string());
+        }
+        _ => {}
+    }
+}
+
+/// Get the names a statement defines (class name, local var names, function name, enum name).
+fn get_statement_defines(stmt: &luao_parser::Statement, rename_map: &HashMap<String, String>) -> Vec<String> {
+    let resolve = |name: &str| -> String {
+        rename_map.get(name).cloned().unwrap_or_else(|| name.to_string())
+    };
+    match stmt {
+        luao_parser::Statement::ClassDecl(cd) => vec![resolve(&cd.name.name)],
+        luao_parser::Statement::EnumDecl(ed) => vec![resolve(&ed.name.name)],
+        luao_parser::Statement::LocalAssignment(la) => {
+            la.names.iter().map(|n| resolve(&n.name)).collect()
+        }
+        luao_parser::Statement::FunctionDecl(fd) => {
+            if let Some(part) = fd.name.parts.first() {
+                vec![resolve(&part.name)]
+            } else {
+                Vec::new()
+            }
+        }
+        luao_parser::Statement::Assignment(a) => {
+            let mut names = Vec::new();
+            for target in &a.targets {
+                if let luao_parser::Expression::Identifier(id) = target {
+                    names.push(resolve(&id.name));
+                }
+            }
+            names
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Get all identifiers referenced in a statement (shallow — top-level names only).
+fn get_statement_uses(stmt: &luao_parser::Statement) -> Vec<String> {
+    let mut uses = HashSet::new();
+    collect_expr_idents_from_stmt(stmt, &mut uses);
+    uses.into_iter().collect()
+}
+
+fn collect_expr_idents_from_stmt(stmt: &luao_parser::Statement, out: &mut HashSet<String>) {
+    use luao_parser::*;
+    match stmt {
+        Statement::LocalAssignment(la) => {
+            for expr in &la.values {
+                collect_expr_idents(expr, out);
+            }
+        }
+        Statement::Assignment(a) => {
+            for expr in &a.targets {
+                collect_expr_idents(expr, out);
+            }
+            for expr in &a.values {
+                collect_expr_idents(expr, out);
+            }
+        }
+        Statement::FunctionDecl(fd) => {
+            // The function name's base (e.g. Foo in Foo.bar) is a dependency if it's a method
+            if fd.name.parts.len() > 1 {
+                out.insert(fd.name.parts[0].name.to_string());
+            }
+            collect_block_idents(&fd.body, out);
+        }
+        Statement::ClassDecl(cd) => {
+            if let Some(ref parent) = cd.parent {
+                out.insert(parent.name.name.to_string());
+            }
+            for member in &cd.members {
+                match member {
+                    ClassMember::Field(f) => {
+                        if let Some(ref val) = f.default_value {
+                            collect_expr_idents(val, out);
+                        }
+                    }
+                    ClassMember::Constructor(c) => {
+                        collect_block_idents(&c.body, out);
+                    }
+                    ClassMember::Method(m) => {
+                        if let Some(ref body) = m.body {
+                            collect_block_idents(body, out);
+                        }
+                    }
+                    ClassMember::Property(p) => {
+                        if let Some(ref body) = p.getter {
+                            collect_block_idents(body, out);
+                        }
+                        if let Some((_, ref body)) = p.setter {
+                            collect_block_idents(body, out);
+                        }
+                    }
+                }
+            }
+        }
+        Statement::ExpressionStatement(expr) => {
+            collect_expr_idents(expr, out);
+        }
+        Statement::ReturnStatement(ret) => {
+            for expr in &ret.values {
+                collect_expr_idents(expr, out);
+            }
+        }
+        Statement::IfStatement(ifs) => {
+            collect_expr_idents(&ifs.condition, out);
+            collect_block_idents(&ifs.then_block, out);
+            for (cond, block) in &ifs.elseif_clauses {
+                collect_expr_idents(cond, out);
+                collect_block_idents(block, out);
+            }
+            if let Some(ref else_block) = ifs.else_block {
+                collect_block_idents(else_block, out);
+            }
+        }
+        Statement::WhileStatement(ws) => {
+            collect_expr_idents(&ws.condition, out);
+            collect_block_idents(&ws.body, out);
+        }
+        Statement::RepeatStatement(rs) => {
+            collect_expr_idents(&rs.condition, out);
+            collect_block_idents(&rs.body, out);
+        }
+        Statement::ForNumeric(f) => {
+            collect_expr_idents(&f.start, out);
+            collect_expr_idents(&f.stop, out);
+            if let Some(ref step) = f.step {
+                collect_expr_idents(step, out);
+            }
+            collect_block_idents(&f.body, out);
+        }
+        Statement::ForGeneric(f) => {
+            for expr in &f.iterators {
+                collect_expr_idents(expr, out);
+            }
+            collect_block_idents(&f.body, out);
+        }
+        Statement::DoBlock(block) => {
+            collect_block_idents(block, out);
+        }
+        Statement::ExportDecl(inner, _) => {
+            collect_expr_idents_from_stmt(inner, out);
+        }
+        _ => {}
+    }
+}
+
+fn collect_block_idents(block: &luao_parser::Block, out: &mut HashSet<String>) {
+    for stmt in &block.statements {
+        collect_expr_idents_from_stmt(stmt, out);
+    }
+}
+
+fn collect_expr_idents(expr: &luao_parser::Expression, out: &mut HashSet<String>) {
+    use luao_parser::Expression::*;
+    match expr {
+        Identifier(id) => {
+            if id.name.as_str() != "self" {
+                out.insert(id.name.to_string());
+            }
+        }
+        BinaryOp(bin) => {
+            collect_expr_idents(&bin.left, out);
+            collect_expr_idents(&bin.right, out);
+        }
+        UnaryOp(un) => {
+            collect_expr_idents(&un.operand, out);
+        }
+        FunctionCall(call) => {
+            collect_expr_idents(&call.callee, out);
+            for arg in &call.args {
+                collect_expr_idents(arg, out);
+            }
+        }
+        MethodCall(mc) => {
+            collect_expr_idents(&mc.object, out);
+            for arg in &mc.args {
+                collect_expr_idents(arg, out);
+            }
+        }
+        FieldAccess(fa) => {
+            collect_expr_idents(&fa.object, out);
+        }
+        IndexAccess(ia) => {
+            collect_expr_idents(&ia.object, out);
+            collect_expr_idents(&ia.index, out);
+        }
+        FunctionExpr(fe) => {
+            collect_block_idents(&fe.body, out);
+        }
+        TableConstructor(tc) => {
+            for field in &tc.fields {
+                match field {
+                    luao_parser::TableField::NamedField(_, val, _) => {
+                        collect_expr_idents(val, out);
+                    }
+                    luao_parser::TableField::IndexField(key, val, _) => {
+                        collect_expr_idents(key, out);
+                        collect_expr_idents(val, out);
+                    }
+                    luao_parser::TableField::ValueField(val, _) => {
+                        collect_expr_idents(val, out);
+                    }
+                }
+            }
+        }
+        NewExpr(ne) => {
+            out.insert(ne.class_name.name.name.to_string());
+            for arg in &ne.args {
+                collect_expr_idents(arg, out);
+            }
+        }
+        Instanceof(inst) => {
+            collect_expr_idents(&inst.object, out);
+            out.insert(inst.class_name.name.to_string());
+        }
+        SuperAccess(_) => {}
+        CastExpr(cast) => {
+            collect_expr_idents(&cast.expr, out);
+        }
         _ => {}
     }
 }
@@ -568,67 +890,6 @@ fn topological_sort(load_order: &[PathBuf], entry: &PathBuf) -> Vec<PathBuf> {
     sorted
 }
 
-fn build_file_deps(
-    modules: &HashMap<PathBuf, Module>,
-    sorted_files: &[PathBuf],
-    entry: &PathBuf,
-) -> Result<HashMap<PathBuf, HashSet<PathBuf>>, Vec<String>> {
-    let mut deps: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::new();
-    for path in sorted_files {
-        let module = &modules[path];
-        let mut file_deps = HashSet::new();
-        for import in &module.imports {
-            let dep_path = resolve_import_path(&module.path, &import.path)?;
-            if dep_path != *entry && dep_path != *path {
-                file_deps.insert(dep_path);
-            }
-        }
-        deps.insert(path.clone(), file_deps);
-    }
-    Ok(deps)
-}
-
-fn detect_circular_files(file_deps: &HashMap<PathBuf, HashSet<PathBuf>>) -> HashSet<PathBuf> {
-    let mut circular = HashSet::new();
-
-    for start in file_deps.keys() {
-        let mut visited = HashSet::new();
-        let mut stack = HashSet::new();
-        detect_cycle_dfs(start, file_deps, &mut visited, &mut stack, &mut circular);
-    }
-
-    circular
-}
-
-fn detect_cycle_dfs(
-    node: &PathBuf,
-    deps: &HashMap<PathBuf, HashSet<PathBuf>>,
-    visited: &mut HashSet<PathBuf>,
-    stack: &mut HashSet<PathBuf>,
-    circular: &mut HashSet<PathBuf>,
-) {
-    if stack.contains(node) {
-        circular.insert(node.clone());
-        return;
-    }
-    if visited.contains(node) {
-        return;
-    }
-
-    visited.insert(node.clone());
-    stack.insert(node.clone());
-
-    if let Some(node_deps) = deps.get(node) {
-        for dep in node_deps {
-            detect_cycle_dfs(dep, deps, visited, stack, circular);
-            if circular.contains(dep) {
-                circular.insert(node.clone());
-            }
-        }
-    }
-
-    stack.remove(node);
-}
 
 // --- Require bundling (luapack-style) ---
 

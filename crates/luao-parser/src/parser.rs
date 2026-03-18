@@ -121,7 +121,7 @@ impl Parser {
                 self.advance();
                 Ok(Statement::Continue(span))
             }
-            TokenKind::Type => self.parse_type_alias(),
+            TokenKind::Type if self.peek_ahead(1).kind == TokenKind::Identifier => self.parse_type_alias(),
             _ => self.parse_expr_or_assignment(),
         }
     }
@@ -626,6 +626,14 @@ impl Parser {
 
     fn parse_interface_method(&mut self) -> ParseResult<InterfaceMethod> {
         let start = self.current_span();
+
+        let is_extern = if self.check(TokenKind::Extern) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
         self.expect(TokenKind::Function)?;
         let name = self.expect_identifier()?;
 
@@ -653,6 +661,7 @@ impl Parser {
             type_params,
             params,
             return_type,
+            is_extern,
             span: start.merge(end),
         })
     }
@@ -669,6 +678,14 @@ impl Parser {
                 break;
             }
             let var_start = self.current_span();
+
+            let is_extern = if self.check(TokenKind::Extern) {
+                self.advance();
+                true
+            } else {
+                false
+            };
+
             let var_name = self.expect_identifier()?;
 
             let value = if self.check(TokenKind::Assign) {
@@ -682,6 +699,7 @@ impl Parser {
             variants.push(EnumVariant {
                 name: var_name,
                 value,
+                is_extern,
                 span: var_start.merge(var_end),
             });
         }
@@ -1469,6 +1487,14 @@ impl Parser {
                     args,
                     span: start.merge(end),
                 })))
+            }
+            _ if self.current().kind.is_contextual_keyword() => {
+                let token = self.current().clone();
+                self.advance();
+                Ok(Expression::Identifier(Identifier {
+                    name: token.lexeme,
+                    span: token.span,
+                }))
             }
             _ => Err(self.error(
                 &format!("unexpected token '{}'", self.current().kind),
