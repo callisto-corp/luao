@@ -18,6 +18,7 @@ pub struct ClassSymbol {
     pub methods: Vec<MethodSymbol>,
     pub is_abstract: bool,
     pub is_sealed: bool,
+    pub is_extern: bool,
     pub type_params: Vec<String>,
     pub source_file: Option<String>,
 }
@@ -49,6 +50,7 @@ pub struct InterfaceSymbol {
     pub id: SymbolId,
     pub name: String,
     pub extends: Vec<String>,
+    pub fields: Vec<FieldSymbol>,
     pub methods: Vec<MethodSymbol>,
     pub type_params: Vec<String>,
 }

@@ -35,6 +35,11 @@ pub struct Emitter {
     pub(crate) no_self: bool,
     /// The name used for the self parameter when no_self is enabled
     pub(crate) self_param_name: Option<String>,
+    /// Tracks the class type of local variables (var_name → class_name).
+    /// Populated from type annotations and `new ClassName()` expressions.
+    pub(crate) local_var_types: HashMap<String, String>,
+    /// When set, table constructor field names are mangled using this type.
+    pub(crate) table_target_type: Option<String>,
 }
 
 impl Emitter {
@@ -55,6 +60,8 @@ impl Emitter {
             property_setters: HashMap::new(),
             no_self: false,
             self_param_name: None,
+            local_var_types: HashMap::new(),
+            table_target_type: None,
         }
     }
 
@@ -169,6 +176,16 @@ impl Emitter {
     /// Check if a name refers to a known class in the symbol table.
     pub fn is_class(&self, name: &str) -> bool {
         self.symbol_table.classes.contains_key(name)
+    }
+
+    /// Check if a name refers to a known interface in the symbol table.
+    pub fn is_interface(&self, name: &str) -> bool {
+        self.symbol_table.interfaces.contains_key(name)
+    }
+
+    /// Check if a name refers to a known class or interface.
+    pub fn is_type(&self, name: &str) -> bool {
+        self.is_class(name) || self.is_interface(name)
     }
 
     /// Check if a name refers to a known enum in the symbol table.

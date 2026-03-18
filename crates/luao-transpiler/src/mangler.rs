@@ -9,8 +9,8 @@ const LUA_KEYWORDS: &[&str] = &[
     "repeat", "return", "then", "true", "type", "until", "while",
 ];
 
-/// Names that should be mangled consistently across ALL types (e.g. _new, _values).
-const SHARED_NAMES: &[&str] = &["_new", "_values"];
+/// Names that should be mangled consistently across ALL types (e.g. new, _values).
+const SHARED_NAMES: &[&str] = &["new", "_values"];
 
 /// Lua metamethods that CANNOT be mangled — the Lua runtime looks them up by exact name.
 const LUA_METAMETHODS: &[&str] = &[
@@ -346,9 +346,9 @@ mod tests {
     #[test]
     fn test_shared_names_consistent() {
         let mut mangler = Mangler::new();
-        let new_a = mangler.mangle("ClassA", "_new");
-        let new_b = mangler.mangle("ClassB", "_new");
-        assert_eq!(new_a, new_b, "_new should have same mangled name across types");
+        let new_a = mangler.mangle("ClassA", "new");
+        let new_b = mangler.mangle("ClassB", "new");
+        assert_eq!(new_a, new_b, "new should have same mangled name across types");
 
         let vals_a = mangler.mangle("EnumA", "_values");
         let vals_b = mangler.mangle("EnumB", "_values");

@@ -304,10 +304,38 @@ impl<'a> Lexer<'a> {
             '}' => TokenKind::RightBrace,
             ';' => TokenKind::Semicolon,
             ',' => TokenKind::Comma,
-            '+' => TokenKind::Plus,
-            '*' => TokenKind::Star,
-            '%' => TokenKind::Percent,
-            '^' => TokenKind::Caret,
+            '+' => {
+                if self.cursor.peek() == Some('=') {
+                    self.cursor.advance();
+                    TokenKind::PlusAssign
+                } else {
+                    TokenKind::Plus
+                }
+            }
+            '*' => {
+                if self.cursor.peek() == Some('=') {
+                    self.cursor.advance();
+                    TokenKind::StarAssign
+                } else {
+                    TokenKind::Star
+                }
+            }
+            '%' => {
+                if self.cursor.peek() == Some('=') {
+                    self.cursor.advance();
+                    TokenKind::PercentAssign
+                } else {
+                    TokenKind::Percent
+                }
+            }
+            '^' => {
+                if self.cursor.peek() == Some('=') {
+                    self.cursor.advance();
+                    TokenKind::CaretAssign
+                } else {
+                    TokenKind::Caret
+                }
+            }
             '#' => TokenKind::Hash,
             '&' => TokenKind::Ampersand,
             '|' => TokenKind::Pipe,
@@ -317,6 +345,9 @@ impl<'a> Lexer<'a> {
                     if self.cursor.peek() == Some('.') {
                         self.cursor.advance();
                         TokenKind::DotDotDot
+                    } else if self.cursor.peek() == Some('=') {
+                        self.cursor.advance();
+                        TokenKind::DotDotAssign
                     } else {
                         TokenKind::DotDot
                     }
@@ -330,6 +361,9 @@ impl<'a> Lexer<'a> {
                 if self.cursor.peek() == Some('>') {
                     self.cursor.advance();
                     TokenKind::Arrow
+                } else if self.cursor.peek() == Some('=') {
+                    self.cursor.advance();
+                    TokenKind::MinusAssign
                 } else {
                     TokenKind::Minus
                 }
@@ -338,6 +372,9 @@ impl<'a> Lexer<'a> {
                 if self.cursor.peek() == Some('/') {
                     self.cursor.advance();
                     TokenKind::DoubleSlash
+                } else if self.cursor.peek() == Some('=') {
+                    self.cursor.advance();
+                    TokenKind::SlashAssign
                 } else {
                     TokenKind::Slash
                 }

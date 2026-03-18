@@ -23,6 +23,7 @@ pub enum Statement {
     ExportDecl(Box<Statement>, Span),
     LocalAssignment(LocalAssignment),
     Assignment(Assignment),
+    CompoundAssignment(CompoundAssignment),
     FunctionDecl(FunctionDecl),
     IfStatement(IfStatement),
     WhileStatement(WhileStatement),
@@ -66,6 +67,7 @@ pub struct ClassDecl {
     pub interfaces: Vec<TypeReference>,
     pub is_abstract: bool,
     pub is_sealed: bool,
+    pub is_extern: bool,
     pub members: Vec<ClassMember>,
     pub span: Span,
 }
@@ -129,8 +131,15 @@ pub struct InterfaceDecl {
     pub name: Identifier,
     pub type_params: Vec<TypeParam>,
     pub extends: Vec<TypeReference>,
-    pub methods: Vec<InterfaceMethod>,
+    pub members: Vec<InterfaceMember>,
+    pub is_extern: bool,
     pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum InterfaceMember {
+    Method(InterfaceMethod),
+    Field(InterfaceField),
 }
 
 #[derive(Debug, Clone)]
@@ -144,9 +153,18 @@ pub struct InterfaceMethod {
 }
 
 #[derive(Debug, Clone)]
+pub struct InterfaceField {
+    pub name: Identifier,
+    pub type_annotation: TypeAnnotation,
+    pub is_extern: bool,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct EnumDecl {
     pub name: Identifier,
     pub variants: Vec<EnumVariant>,
+    pub is_extern: bool,
     pub span: Span,
 }
 
@@ -230,6 +248,25 @@ pub struct LocalAssignment {
 pub struct Assignment {
     pub targets: Vec<Expression>,
     pub values: Vec<Expression>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CompoundOp {
+    Add,    // +=
+    Sub,    // -=
+    Mul,    // *=
+    Div,    // /=
+    Mod,    // %=
+    Pow,    // ^=
+    Concat, // ..=
+}
+
+#[derive(Debug, Clone)]
+pub struct CompoundAssignment {
+    pub target: Expression,
+    pub op: CompoundOp,
+    pub value: Expression,
     pub span: Span,
 }
 
@@ -319,6 +356,7 @@ pub enum Expression {
     SuperAccess(Box<SuperAccess>),
     NewExpr(Box<NewExpr>),
     CastExpr(Box<CastExpr>),
+    IfExpression(Box<IfExpr>),
 }
 
 impl Expression {
@@ -343,6 +381,7 @@ impl Expression {
             Expression::SuperAccess(s) => s.span,
             Expression::NewExpr(n) => n.span,
             Expression::CastExpr(c) => c.span,
+            Expression::IfExpression(i) => i.span,
         }
     }
 }
@@ -469,5 +508,14 @@ pub struct NewExpr {
 pub struct CastExpr {
     pub expr: Expression,
     pub target_type: TypeAnnotation,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct IfExpr {
+    pub condition: Expression,
+    pub then_expr: Expression,
+    pub elseif_clauses: Vec<(Expression, Expression)>,
+    pub else_expr: Expression,
     pub span: Span,
 }

@@ -184,6 +184,10 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
         None
     };
 
+    // Shared type map across all files — so type info from one file's exports
+    // is available when other files access those variables
+    let mut shared_var_types: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
     // Transpile each statement individually, collecting metadata
     #[allow(dead_code)]
     struct EmittedItem {
@@ -258,12 +262,17 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
             emitter.no_self = options.no_self;
             emitter.local_renames = rename_map.clone();
             emitter.import_aliases = alias_map.clone();
+            emitter.local_var_types = shared_var_types.clone();
 
             emitter.emit_statement(actual_stmt);
 
             let code = std::mem::take(&mut emitter.output);
             let needs_instanceof = emitter.needs_instanceof;
             let needs_enum_freeze = emitter.needs_enum_freeze;
+            // Carry forward type info learned from this statement
+            for (k, v) in &emitter.local_var_types {
+                shared_var_types.insert(k.clone(), v.clone());
+            }
             shared_mangler = emitter.mangler.take();
 
             if code.trim().is_empty() { continue; }
@@ -742,6 +751,10 @@ fn collect_expr_idents_from_stmt(stmt: &luao_parser::Statement, out: &mut HashSe
         Statement::DoBlock(block) => {
             collect_block_idents(block, out);
         }
+        Statement::CompoundAssignment(ca) => {
+            collect_expr_idents(&ca.target, out);
+            collect_expr_idents(&ca.value, out);
+        }
         Statement::ExportDecl(inner, _) => {
             collect_expr_idents_from_stmt(inner, out);
         }
@@ -821,6 +834,15 @@ fn collect_expr_idents(expr: &luao_parser::Expression, out: &mut HashSet<String>
         SuperAccess(_) => {}
         CastExpr(cast) => {
             collect_expr_idents(&cast.expr, out);
+        }
+        IfExpression(ie) => {
+            collect_expr_idents(&ie.condition, out);
+            collect_expr_idents(&ie.then_expr, out);
+            for (c, e) in &ie.elseif_clauses {
+                collect_expr_idents(c, out);
+                collect_expr_idents(e, out);
+            }
+            collect_expr_idents(&ie.else_expr, out);
         }
         _ => {}
     }

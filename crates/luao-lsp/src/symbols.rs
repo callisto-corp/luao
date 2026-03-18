@@ -87,17 +87,29 @@ pub fn document_symbols(doc: &DocumentState) -> Vec<DocumentSymbol> {
             }
             luao_parser::Statement::InterfaceDecl(i) => {
                 let children: Vec<DocumentSymbol> = i
-                    .methods
+                    .members
                     .iter()
-                    .map(|m| DocumentSymbol {
-                        name: m.name.name.to_string(),
-                        detail: Some("method".to_string()),
-                        kind: SymbolKind::METHOD,
-                        tags: None,
-                        deprecated: None,
-                        range: span_to_range(m.span),
-                        selection_range: span_to_range(m.name.span),
-                        children: None,
+                    .map(|member| match member {
+                        luao_parser::InterfaceMember::Method(m) => DocumentSymbol {
+                            name: m.name.name.to_string(),
+                            detail: Some("method".to_string()),
+                            kind: SymbolKind::METHOD,
+                            tags: None,
+                            deprecated: None,
+                            range: span_to_range(m.span),
+                            selection_range: span_to_range(m.name.span),
+                            children: None,
+                        },
+                        luao_parser::InterfaceMember::Field(f) => DocumentSymbol {
+                            name: f.name.name.to_string(),
+                            detail: Some("field".to_string()),
+                            kind: SymbolKind::FIELD,
+                            tags: None,
+                            deprecated: None,
+                            range: span_to_range(f.span),
+                            selection_range: span_to_range(f.name.span),
+                            children: None,
+                        },
                     })
                     .collect();
 

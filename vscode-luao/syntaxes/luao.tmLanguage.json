@@ -83,7 +83,7 @@
       ]
     },
     "class-definition": {
-      "match": "\\b(class)\\s+([a-zA-Z_]\\w*)(?:\\s+(extends)\\s+([a-zA-Z_]\\w*))?(?:\\s+(implements)\\s+([a-zA-Z_]\\w*))?",
+      "match": "(?:\\b(?:export|extern|abstract|sealed)\\s+)*\\b(class)\\s+([a-zA-Z_]\\w*)(?:\\s+(extends)\\s+([a-zA-Z_]\\w*))?(?:\\s+(implements)\\s+([a-zA-Z_]\\w*))?",
       "captures": {
         "1": { "name": "keyword.declaration.class.luao" },
         "2": { "name": "entity.name.type.class.luao" },
@@ -94,21 +94,21 @@
       }
     },
     "interface-definition": {
-      "match": "\\b(interface)\\s+([a-zA-Z_]\\w*)",
+      "match": "(?:\\b(?:export|extern)\\s+)*\\b(interface)\\s+([a-zA-Z_]\\w*)",
       "captures": {
         "1": { "name": "keyword.declaration.interface.luao" },
         "2": { "name": "entity.name.type.interface.luao" }
       }
     },
     "enum-definition": {
-      "match": "\\b(enum)\\s+([a-zA-Z_]\\w*)",
+      "match": "(?:\\b(?:export|extern)\\s+)*\\b(enum)\\s+([a-zA-Z_]\\w*)",
       "captures": {
         "1": { "name": "keyword.declaration.enum.luao" },
         "2": { "name": "entity.name.type.enum.luao" }
       }
     },
     "type-alias-definition": {
-      "match": "\\b(type)\\s+([a-zA-Z_]\\w*)",
+      "match": "(?:\\b(?:export)\\s+)?\\b(type)\\s+([a-zA-Z_]\\w*)\\s*(?==)",
       "captures": {
         "1": { "name": "keyword.declaration.type.luao" },
         "2": { "name": "entity.name.type.alias.luao" }
@@ -122,8 +122,58 @@
       }
     },
     "luao-keywords": {
-      "match": "\\b(class|extends|implements|interface|abstract|static|public|private|protected|readonly|super|new|enum|sealed|get|set|override|instanceof|extern|as|type|continue|import|export|from)\\b",
-      "name": "keyword.other.luao"
+      "patterns": [
+        {
+          "comment": "Keywords that are always keywords regardless of context",
+          "match": "\\b(continue|instanceof|super)\\b",
+          "name": "keyword.other.luao"
+        },
+        {
+          "comment": "new keyword before a class name",
+          "match": "\\b(new)\\s+(?=[a-zA-Z_])",
+          "captures": { "1": { "name": "keyword.operator.new.luao" } }
+        },
+        {
+          "comment": "as keyword between expression and type",
+          "match": "\\b(as)\\s+(?=[a-zA-Z_])",
+          "captures": { "1": { "name": "keyword.operator.cast.luao" } }
+        },
+        {
+          "comment": "import/export/from in module context",
+          "match": "^\\s*(import)\\b",
+          "captures": { "1": { "name": "keyword.control.import.luao" } }
+        },
+        {
+          "comment": "export at start of statement",
+          "match": "^\\s*(export)\\s+(?=local|function|class|abstract|sealed|extern|enum|interface|type)",
+          "captures": { "1": { "name": "keyword.control.export.luao" } }
+        },
+        {
+          "comment": "from in import statement",
+          "match": "\\b(from)\\s+(?=\")",
+          "captures": { "1": { "name": "keyword.control.import.luao" } }
+        },
+        {
+          "comment": "Access modifiers and class modifiers before declarations",
+          "match": "\\b(public|private|protected|static|readonly|override|extern|abstract|sealed)\\s+(?=function|class|interface|enum|abstract|sealed|extern|public|private|protected|static|readonly|override|get|set|[a-zA-Z_]\\w*\\s*:)",
+          "captures": { "1": { "name": "keyword.other.modifier.luao" } }
+        },
+        {
+          "comment": "get/set in property context",
+          "match": "\\b(get|set)\\s+(?=[a-zA-Z_]\\w*\\s*[:(])",
+          "captures": { "1": { "name": "keyword.other.accessor.luao" } }
+        },
+        {
+          "comment": "extends/implements after class name",
+          "match": "\\b(extends|implements)\\s+(?=[a-zA-Z_])",
+          "captures": { "1": { "name": "keyword.declaration.luao" } }
+        },
+        {
+          "comment": "Compound assignment operators",
+          "match": "\\+=|-=|\\*=|/=|%=|\\^=|\\.\\.=",
+          "name": "keyword.operator.assignment.compound.luao"
+        }
+      ]
     },
     "lua-keywords": {
       "patterns": [

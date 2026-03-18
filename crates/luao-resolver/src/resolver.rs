@@ -75,7 +75,7 @@ impl Resolver {
                         access: f.access,
                         is_static: f.is_static,
                         is_readonly: f.is_readonly,
-                        is_extern: f.is_extern,
+                        is_extern: f.is_extern || decl.is_extern,
                     });
                 }
                 ClassMember::Method(m) => {
@@ -104,7 +104,7 @@ impl Resolver {
                         is_static: m.is_static,
                         is_abstract: m.is_abstract,
                         is_override: m.is_override,
-                        is_extern: m.is_extern,
+                        is_extern: m.is_extern || decl.is_extern,
                     });
                 }
                 ClassMember::Constructor(c) => {
@@ -144,6 +144,7 @@ impl Resolver {
             methods,
             is_abstract: decl.is_abstract,
             is_sealed: decl.is_sealed,
+            is_extern: decl.is_extern,
             type_params,
             source_file: self.source_file.clone(),
         };
@@ -165,44 +166,58 @@ impl Resolver {
             .map(|tp| tp.name.name.to_string())
             .collect();
 
-        let methods = decl
-            .methods
-            .iter()
-            .map(|m| {
-                let params = m
-                    .params
-                    .iter()
-                    .map(|p| {
-                        let ty = p
-                            .type_annotation
-                            .as_ref()
-                            .map(|ta| self.resolve_type(ta))
-                            .unwrap_or(LuaoType::Unknown);
-                        (p.name.name.to_string(), ty)
-                    })
-                    .collect();
-                let return_type = m
-                    .return_type
-                    .as_ref()
-                    .map(|ta| self.resolve_type(ta))
-                    .unwrap_or(LuaoType::Void);
-                MethodSymbol {
-                    name: m.name.name.to_string(),
-                    params,
-                    return_type,
-                    access: AccessModifier::Public,
-                    is_static: false,
-                    is_abstract: true,
-                    is_override: false,
-                    is_extern: m.is_extern,
+        let mut fields = Vec::new();
+        let mut methods = Vec::new();
+        for member in &decl.members {
+            match member {
+                luao_parser::InterfaceMember::Method(m) => {
+                    let params = m
+                        .params
+                        .iter()
+                        .map(|p| {
+                            let ty = p
+                                .type_annotation
+                                .as_ref()
+                                .map(|ta| self.resolve_type(ta))
+                                .unwrap_or(LuaoType::Unknown);
+                            (p.name.name.to_string(), ty)
+                        })
+                        .collect();
+                    let return_type = m
+                        .return_type
+                        .as_ref()
+                        .map(|ta| self.resolve_type(ta))
+                        .unwrap_or(LuaoType::Void);
+                    methods.push(MethodSymbol {
+                        name: m.name.name.to_string(),
+                        params,
+                        return_type,
+                        access: AccessModifier::Public,
+                        is_static: false,
+                        is_abstract: true,
+                        is_override: false,
+                        is_extern: m.is_extern || decl.is_extern,
+                    });
                 }
-            })
-            .collect();
+                luao_parser::InterfaceMember::Field(f) => {
+                    let type_info = self.resolve_type(&f.type_annotation);
+                    fields.push(FieldSymbol {
+                        name: f.name.name.to_string(),
+                        type_info,
+                        access: AccessModifier::Public,
+                        is_static: false,
+                        is_readonly: false,
+                        is_extern: f.is_extern || decl.is_extern,
+                    });
+                }
+            }
+        }
 
         let iface_sym = InterfaceSymbol {
             id,
             name: name.clone(),
             extends,
+            fields,
             methods,
             type_params,
         };

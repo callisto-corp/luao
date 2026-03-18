@@ -1,542 +1,770 @@
-//! Lua minifier — renames local variables to short names and strips whitespace.
+//! Lua/Luau minifier — tokenizer-based, no external dependencies.
 //!
-//! Two-phase approach:
-//! 1. Scope analysis: walk the AST to build a scope tree mapping each local
-//!    binding to a short generated name, respecting shadowing and nested scopes.
-//! 2. Token rewrite: walk the AST with VisitorMut, renaming every identifier
-//!    that refers to a local binding and stripping trivia (whitespace/comments).
+//! Two-pass approach:
+//! 1. Tokenize source into flat token stream.
+//! 2. Walk tokens with a recursive descent mini-parser that tracks scopes,
+//!    binds locals, renames identifiers, and emits minimal output.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use full_moon::ast::{self, Block, Expression, FunctionBody, LastStmt, Parameter, Prefix, Stmt, Var};
-use full_moon::tokenizer::{Token, TokenReference, TokenType};
-use full_moon::visitors::VisitorMut;
+// ── Token types ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+enum Tok {
+    Ident(String),
+    Keyword(String),
+    Number(String),
+    StringLit(String),
+    Punct(String),
+}
+
+// ── Tokenizer ──────────────────────────────────────────────────────────
+
+const LUA_KEYWORDS: &[&str] = &[
+    "and", "break", "do", "else", "elseif", "end", "false", "for",
+    "function", "goto", "if", "in", "local", "nil", "not", "or",
+    "repeat", "return", "then", "true", "until", "while", "continue",
+];
+
+fn tokenize(src: &str) -> Vec<Tok> {
+    let bytes = src.as_bytes();
+    let len = bytes.len();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+
+    while i < len {
+        let b = bytes[i];
+
+        if b.is_ascii_whitespace() {
+            i += 1;
+            while i < len && bytes[i].is_ascii_whitespace() { i += 1; }
+            continue;
+        }
+
+        // Long comment --[=*[
+        if i + 2 < len && bytes[i] == b'-' && bytes[i+1] == b'-' && bytes[i+2] == b'[' {
+            let mut j = i + 3;
+            let mut eq = 0;
+            while j < len && bytes[j] == b'=' { eq += 1; j += 1; }
+            if j < len && bytes[j] == b'[' {
+                j += 1;
+                let close: Vec<u8> = {
+                    let mut v = vec![b']'];
+                    for _ in 0..eq { v.push(b'='); }
+                    v.push(b']');
+                    v
+                };
+                while j + close.len() <= len {
+                    if bytes[j..j+close.len()] == close[..] { j += close.len(); break; }
+                    j += 1;
+                }
+                i = j;
+                continue;
+            }
+        }
+
+        // Line comment
+        if i + 1 < len && bytes[i] == b'-' && bytes[i+1] == b'-' {
+            while i < len && bytes[i] != b'\n' { i += 1; }
+            continue;
+        }
+
+        // Long string [=*[
+        if bytes[i] == b'[' {
+            let mut j = i + 1;
+            let mut eq = 0;
+            while j < len && bytes[j] == b'=' { eq += 1; j += 1; }
+            if j < len && bytes[j] == b'[' {
+                j += 1;
+                let close: Vec<u8> = {
+                    let mut v = vec![b']'];
+                    for _ in 0..eq { v.push(b'='); }
+                    v.push(b']');
+                    v
+                };
+                let start = i;
+                while j + close.len() <= len {
+                    if bytes[j..j+close.len()] == close[..] { j += close.len(); break; }
+                    j += 1;
+                }
+                tokens.push(Tok::StringLit(String::from_utf8_lossy(&bytes[start..j]).into()));
+                i = j;
+                continue;
+            }
+        }
+
+        // Strings
+        if b == b'"' || b == b'\'' {
+            let q = b;
+            let start = i;
+            i += 1;
+            while i < len && bytes[i] != q {
+                if bytes[i] == b'\\' { i += 1; }
+                i += 1;
+            }
+            if i < len { i += 1; }
+            tokens.push(Tok::StringLit(String::from_utf8_lossy(&bytes[start..i]).into()));
+            continue;
+        }
+
+        // Numbers
+        if b.is_ascii_digit() || (b == b'.' && i+1 < len && bytes[i+1].is_ascii_digit()) {
+            let start = i;
+            if b == b'0' && i+1 < len && (bytes[i+1] == b'x' || bytes[i+1] == b'X') {
+                i += 2;
+                while i < len && bytes[i].is_ascii_hexdigit() { i += 1; }
+            } else {
+                while i < len && (bytes[i].is_ascii_digit() || bytes[i] == b'.') { i += 1; }
+                if i < len && (bytes[i] == b'e' || bytes[i] == b'E') {
+                    i += 1;
+                    if i < len && (bytes[i] == b'+' || bytes[i] == b'-') { i += 1; }
+                    while i < len && bytes[i].is_ascii_digit() { i += 1; }
+                }
+            }
+            tokens.push(Tok::Number(String::from_utf8_lossy(&bytes[start..i]).into()));
+            continue;
+        }
+
+        // Identifiers / keywords
+        if b.is_ascii_alphabetic() || b == b'_' {
+            let start = i;
+            while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') { i += 1; }
+            let w: String = String::from_utf8_lossy(&bytes[start..i]).into();
+            if LUA_KEYWORDS.contains(&w.as_str()) {
+                tokens.push(Tok::Keyword(w));
+            } else {
+                tokens.push(Tok::Ident(w));
+            }
+            continue;
+        }
+
+        // 3-char punct
+        if i+2 < len {
+            let s = String::from_utf8_lossy(&bytes[i..i+3]);
+            if s == "..." || s == "..=" {
+                tokens.push(Tok::Punct(s.into()));
+                i += 3;
+                continue;
+            }
+        }
+        // 2-char punct
+        if i+1 < len {
+            let s = String::from_utf8_lossy(&bytes[i..i+2]);
+            match s.as_ref() {
+                "==" | "~=" | "<=" | ">=" | ".." | "//" | "<<" | ">>" | "->" |
+                "+=" | "-=" | "*=" | "/=" | "%=" | "^=" => {
+                    tokens.push(Tok::Punct(s.into()));
+                    i += 2;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        tokens.push(Tok::Punct(String::from(b as char)));
+        i += 1;
+    }
+    tokens
+}
 
 // ── Name generation ────────────────────────────────────────────────────
 
 const FIRST: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
-const REST: &[u8]  = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789";
+const REST: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789";
 
-const LUA_KEYWORDS: &[&str] = &[
-    "and", "break", "do", "else", "elseif", "end", "false", "for",
-    "function", "if", "in", "local", "nil", "not", "or", "repeat",
-    "return", "then", "true", "until", "while",
-    // lua 5.2+
-    "goto", "continue",
-];
-
-fn index_to_name(mut idx: usize) -> String {
+fn idx_to_name(mut idx: usize) -> String {
     let fc = FIRST.len();
     let rc = REST.len();
-    if idx < fc {
-        return String::from(FIRST[idx] as char);
-    }
+    if idx < fc { return String::from(FIRST[idx] as char); }
     idx -= fc;
-    let mut len: u32 = 2;
+    let mut length: u32 = 2;
     let mut count = fc * rc;
-    while idx >= count {
-        idx -= count;
-        len += 1;
-        count *= rc;
-    }
-    let mut name = String::with_capacity(len as usize);
-    let rp = rc.pow(len - 1);
-    name.push(FIRST[idx / rp] as char);
+    while idx >= count { idx -= count; length += 1; count *= rc; }
+    let mut s = String::with_capacity(length as usize);
+    let rp = rc.pow(length - 1);
+    s.push(FIRST[idx / rp] as char);
     idx %= rp;
-    for i in (0..len - 1).rev() {
-        let d = rc.pow(i);
-        name.push(REST[idx / d] as char);
-        idx %= d;
-    }
-    name
+    for i in (0..length-1).rev() { let d = rc.pow(i); s.push(REST[idx / d] as char); idx %= d; }
+    s
 }
 
-// ── Scope tracking ─────────────────────────────────────────────────────
+// ── Scope / Renamer ────────────────────────────────────────────────────
 
-/// A scope frame: tracks which names are local bindings introduced in this scope,
-/// and what short name they map to.
-struct Scope {
-    /// original name → short name
-    renames: HashMap<String, String>,
-}
-
-/// Walks the Lua AST and builds a rename table for every local binding.
-/// Returns a flat map: (original_name, declaration_line) → short_name is too fragile;
-/// instead we return a map keyed on the token's byte position for precision.
-struct ScopeAnalyzer {
-    scopes: Vec<Scope>,
-    /// Maps token start byte offset → short name.  This is the most precise way
-    /// to target exactly the right token when multiple locals share the same name
-    /// in different scopes.
-    rename_map: HashMap<(usize, usize), String>,
-    /// Global counter for generating short names within each scope level.
-    name_counter: usize,
-    /// Names that are known globals (never rename these).
-    globals: HashSet<String>,
-    /// When true, `self` is treated as a normal renameable local.
+struct Renamer {
+    scopes: Vec<HashMap<String, String>>,
+    counter: usize,
     no_self: bool,
 }
 
-impl ScopeAnalyzer {
+impl Renamer {
     fn new(no_self: bool) -> Self {
-        Self {
-            scopes: vec![Scope { renames: HashMap::new() }], // root scope
-            rename_map: HashMap::new(),
-            name_counter: 0,
-            globals: HashSet::new(),
-            no_self,
-        }
+        Self { scopes: vec![HashMap::new()], counter: 0, no_self }
     }
-
-    fn push_scope(&mut self) {
-        self.scopes.push(Scope { renames: HashMap::new() });
-    }
-
-    fn pop_scope(&mut self) {
-        self.scopes.pop();
-    }
-
-    fn next_short_name(&mut self) -> String {
+    fn push(&mut self) { self.scopes.push(HashMap::new()); }
+    fn pop(&mut self) { if self.scopes.len() > 1 { self.scopes.pop(); } }
+    fn next_name(&mut self) -> String {
         loop {
-            let name = index_to_name(self.name_counter);
-            self.name_counter += 1;
-            if !LUA_KEYWORDS.contains(&name.as_str()) && !self.globals.contains(&name) {
-                return name;
-            }
+            let n = idx_to_name(self.counter);
+            self.counter += 1;
+            if !LUA_KEYWORDS.contains(&n.as_str()) { return n; }
         }
     }
-
-    /// Register a local binding in the current scope.
-    fn bind_local(&mut self, token: &TokenReference) {
-        let name = get_token_name(token);
+    fn bind(&mut self, name: &str) {
         if name == "..." { return; }
         if name == "self" && !self.no_self { return; }
-        let short = self.next_short_name();
-        let pos = token_pos(token);
-        self.rename_map.insert(pos, short.clone());
+        let short = self.next_name();
         if let Some(scope) = self.scopes.last_mut() {
-            scope.renames.insert(name, short);
+            scope.insert(name.to_string(), short);
         }
     }
-
-    /// Look up the rename for a variable reference.
-    fn lookup(&self, name: &str) -> Option<&str> {
+    fn resolve(&self, name: &str) -> String {
+        if name == "self" && !self.no_self { return name.to_string(); }
         for scope in self.scopes.iter().rev() {
-            if let Some(short) = scope.renames.get(name) {
-                return Some(short);
-            }
+            if let Some(short) = scope.get(name) { return short.clone(); }
         }
-        None
-    }
-
-    /// Resolve and record a reference usage.
-    fn resolve_ref(&mut self, token: &TokenReference) {
-        let name = get_token_name(token);
-        if name == "self" && !self.no_self { return; }
-        if let Some(short) = self.lookup(&name) {
-            let pos = token_pos(token);
-            self.rename_map.insert(pos, short.to_string());
-        }
+        name.to_string()
     }
 }
 
-fn get_token_name(t: &TokenReference) -> String {
-    match t.token().token_type() {
-        TokenType::Identifier { identifier } => identifier.to_string(),
-        _ => t.to_string().trim().to_string(),
+// ── Emitter ────────────────────────────────────────────────────────────
+
+struct Emitter {
+    out: String,
+    last_was_number: bool,
+}
+
+impl Emitter {
+    fn new() -> Self { Self { out: String::new(), last_was_number: false } }
+
+    fn emit(&mut self, text: &str) {
+        self.emit_inner(text, false);
+    }
+
+    fn emit_number(&mut self, text: &str) {
+        self.emit_inner(text, true);
+    }
+
+    fn emit_inner(&mut self, text: &str, is_number: bool) {
+        if text.is_empty() { return; }
+        if let (Some(&prev), Some(&next)) = (self.out.as_bytes().last(), text.as_bytes().first()) {
+            if needs_space(prev, next, self.last_was_number) { self.out.push(' '); }
+        }
+        self.out.push_str(text);
+        self.last_was_number = is_number;
     }
 }
 
-fn token_pos(t: &TokenReference) -> (usize, usize) {
-    let p = t.token().start_position();
-    (p.bytes(), p.line())
+fn needs_space(p: u8, n: u8, prev_was_number: bool) -> bool {
+    let pc = p as char;
+    let nc = n as char;
+    if is_idc(pc) && is_idc(nc) { return true; }
+    if pc == '-' && nc == '-' { return true; }
+    // Only need space between an actual number token and `.` to prevent `1.` ambiguity
+    if prev_was_number && nc == '.' { return true; }
+    if pc == '.' && nc == '.' { return true; }
+    false
 }
 
-// ── Phase 1: Scope analysis via Visitor ────────────────────────────────
+fn is_idc(c: char) -> bool { c.is_ascii_alphanumeric() || c == '_' }
 
-impl ScopeAnalyzer {
-    fn analyze_block(&mut self, block: &Block) {
-        for stmt in block.stmts() {
-            self.analyze_stmt(stmt);
-        }
-        if let Some(last) = block.last_stmt() {
-            self.analyze_last_stmt(last);
+// ── Recursive-descent minifier ─────────────────────────────────────────
+
+struct Minifier {
+    toks: Vec<Tok>,
+    pos: usize,
+    ren: Renamer,
+    em: Emitter,
+}
+
+impl Minifier {
+    fn new(toks: Vec<Tok>, no_self: bool) -> Self {
+        Self { toks, pos: 0, ren: Renamer::new(no_self), em: Emitter::new() }
+    }
+
+    fn peek(&self) -> Option<&Tok> { self.toks.get(self.pos) }
+    fn advance(&mut self) -> Option<Tok> {
+        if self.pos < self.toks.len() { let t = self.toks[self.pos].clone(); self.pos += 1; Some(t) } else { None }
+    }
+    fn is_kw(&self, kw: &str) -> bool { matches!(self.peek(), Some(Tok::Keyword(k)) if k == kw) }
+    fn is_punct(&self, p: &str) -> bool { matches!(self.peek(), Some(Tok::Punct(s)) if s == p) }
+    fn is_ident(&self) -> bool { matches!(self.peek(), Some(Tok::Ident(_))) }
+    fn eat_kw(&mut self, kw: &str) -> bool { if self.is_kw(kw) { self.advance(); true } else { false } }
+    fn eat_punct(&mut self, p: &str) -> bool { if self.is_punct(p) { self.advance(); true } else { false } }
+
+    fn run(&mut self) {
+        self.block(&["eof"]);
+    }
+
+    /// Parse and emit a block of statements until we see a closing keyword.
+    fn block(&mut self, closers: &[&str]) {
+        loop {
+            if self.pos >= self.toks.len() { break; }
+            if let Some(Tok::Keyword(k)) = self.peek() {
+                if closers.contains(&k.as_str()) { break; }
+            }
+            self.statement();
         }
     }
 
-    fn analyze_stmt(&mut self, stmt: &Stmt) {
-        match stmt {
-            Stmt::LocalAssignment(la) => {
-                // First analyze the RHS (before the locals are in scope)
-                for expr in la.expressions().iter() {
-                    self.analyze_expr(expr);
-                }
-                // Then bind the locals
-                for pair in la.names().pairs() {
-                    self.bind_local(pair.value());
-                }
-            }
-            Stmt::LocalFunction(lf) => {
-                // The function name is local in the current scope
-                self.bind_local(lf.name());
-                // Function body has its own scope
-                self.analyze_function_body(lf.body());
-            }
-            Stmt::FunctionDeclaration(fd) => {
-                // Resolve the function name parts as references
-                let name = fd.name();
-                for pair in name.names().pairs() {
-                    self.resolve_ref(pair.value());
-                }
-                if let Some(method) = name.method_name() {
-                    // method name is after `:`, don't rename
-                    let _ = method;
-                }
-                self.analyze_function_body(fd.body());
-            }
-            Stmt::Assignment(assign) => {
-                for var in assign.variables().iter() {
-                    self.analyze_var(var);
-                }
-                for expr in assign.expressions().iter() {
-                    self.analyze_expr(expr);
+    fn statement(&mut self) {
+        match self.peek() {
+            None => { return; }
+            Some(Tok::Keyword(k)) => {
+                match k.as_str() {
+                    "local" => self.stmt_local(),
+                    "function" => self.stmt_function(),
+                    "if" => self.stmt_if(),
+                    "while" => self.stmt_while(),
+                    "repeat" => self.stmt_repeat(),
+                    "for" => self.stmt_for(),
+                    "do" => self.stmt_do(),
+                    "return" => self.stmt_return(),
+                    "break" | "continue" => { let k = self.advance().unwrap(); if let Tok::Keyword(w) = k { self.em.emit(&w); } }
+                    "goto" => { self.advance(); self.em.emit("goto"); if self.is_ident() { let t = self.advance().unwrap(); if let Tok::Ident(n) = t { self.em.emit(&n); } } }
+                    _ => { self.expr_stat(); }
                 }
             }
-            Stmt::FunctionCall(call) => {
-                self.analyze_function_call(call);
+            _ => { self.expr_stat(); }
+        }
+    }
+
+    // ── Statements ─────────────────────────────────────────────────────
+
+    fn stmt_local(&mut self) {
+        self.advance(); // local
+        self.em.emit("local");
+
+        if self.is_kw("function") {
+            // local function NAME(...)
+            self.advance();
+            self.em.emit("function");
+            if let Some(Tok::Ident(name)) = self.peek().cloned() {
+                self.advance();
+                self.ren.bind(&name);
+                self.em.emit(&self.ren.resolve(&name));
             }
-            Stmt::Do(do_stmt) => {
-                self.push_scope();
-                self.analyze_block(do_stmt.block());
-                self.pop_scope();
+            self.func_body();
+            return;
+        }
+
+        // local name, name, ... [= expr, expr, ...]
+        let mut first = true;
+        loop {
+            if !first { self.em.emit(","); }
+            if let Some(Tok::Ident(name)) = self.peek().cloned() {
+                self.advance();
+                self.ren.bind(&name);
+                self.em.emit(&self.ren.resolve(&name));
+                first = false;
+            } else {
+                break;
             }
-            Stmt::If(if_stmt) => {
-                self.analyze_expr(if_stmt.condition());
-                self.push_scope();
-                self.analyze_block(if_stmt.block());
-                self.pop_scope();
-                if let Some(else_ifs) = if_stmt.else_if() {
-                    for else_if in else_ifs {
-                        self.analyze_expr(else_if.condition());
-                        self.push_scope();
-                        self.analyze_block(else_if.block());
-                        self.pop_scope();
+            if !self.is_punct(",") { break; }
+            self.advance(); // ,
+        }
+
+        if self.eat_punct("=") {
+            self.em.emit("=");
+            self.expr_list();
+        }
+    }
+
+    fn stmt_function(&mut self) {
+        self.advance(); // function
+        self.em.emit("function");
+        // function name[.name][:name](...)
+        self.func_name();
+        self.func_body();
+    }
+
+    fn func_name(&mut self) {
+        // first part: resolve as it could be a local
+        if let Some(Tok::Ident(name)) = self.peek().cloned() {
+            self.advance();
+            self.em.emit(&self.ren.resolve(&name));
+        }
+        // .name parts: don't rename (table fields)
+        while self.is_punct(".") || self.is_punct(":") {
+            let p = self.advance().unwrap();
+            if let Tok::Punct(s) = p { self.em.emit(&s); }
+            if let Some(Tok::Ident(name)) = self.peek().cloned() {
+                self.advance();
+                self.em.emit(&name); // table fields not renamed
+            }
+        }
+    }
+
+    fn func_body(&mut self) {
+        self.ren.push();
+        if self.eat_punct("(") {
+            self.em.emit("(");
+            self.param_list();
+            // ) consumed by param_list
+        }
+        self.block(&["end"]);
+        if self.eat_kw("end") { self.em.emit("end"); }
+        self.ren.pop();
+    }
+
+    fn param_list(&mut self) {
+        let mut first = true;
+        loop {
+            if self.is_punct(")") { self.advance(); self.em.emit(")"); return; }
+            if !first { if self.eat_punct(",") { self.em.emit(","); } }
+            if self.is_punct("...") {
+                self.advance();
+                self.em.emit("...");
+            } else if let Some(Tok::Ident(name)) = self.peek().cloned() {
+                self.advance();
+                self.ren.bind(&name);
+                self.em.emit(&self.ren.resolve(&name));
+            } else {
+                break;
+            }
+            first = false;
+        }
+        if self.eat_punct(")") { self.em.emit(")"); }
+    }
+
+    fn stmt_if(&mut self) {
+        self.advance(); // if
+        self.em.emit("if");
+        self.expression(); // condition
+        if self.eat_kw("then") { self.em.emit("then"); }
+        self.block(&["else", "elseif", "end"]);
+        loop {
+            if self.eat_kw("elseif") {
+                self.em.emit("elseif");
+                self.expression();
+                if self.eat_kw("then") { self.em.emit("then"); }
+                self.block(&["else", "elseif", "end"]);
+            } else if self.eat_kw("else") {
+                self.em.emit("else");
+                self.block(&["end"]);
+            } else {
+                break;
+            }
+        }
+        if self.eat_kw("end") { self.em.emit("end"); }
+    }
+
+    fn stmt_while(&mut self) {
+        self.advance(); self.em.emit("while");
+        self.expression();
+        if self.eat_kw("do") { self.em.emit("do"); }
+        self.ren.push();
+        self.block(&["end"]);
+        if self.eat_kw("end") { self.em.emit("end"); }
+        self.ren.pop();
+    }
+
+    fn stmt_repeat(&mut self) {
+        self.advance(); self.em.emit("repeat");
+        self.ren.push();
+        self.block(&["until"]);
+        if self.eat_kw("until") { self.em.emit("until"); }
+        self.expression();
+        self.ren.pop();
+    }
+
+    fn stmt_for(&mut self) {
+        self.advance(); self.em.emit("for");
+        self.ren.push();
+
+        // Collect first name
+        if let Some(Tok::Ident(name)) = self.peek().cloned() {
+            self.advance();
+            self.ren.bind(&name);
+            self.em.emit(&self.ren.resolve(&name));
+        }
+
+        if self.is_punct("=") {
+            // numeric for: for i = start, end [, step] do
+            self.advance(); self.em.emit("=");
+            self.expression();
+            if self.eat_punct(",") { self.em.emit(","); self.expression(); }
+            if self.eat_punct(",") { self.em.emit(","); self.expression(); }
+        } else {
+            // generic for: for a, b, ... in exprs do
+            while self.eat_punct(",") {
+                self.em.emit(",");
+                if let Some(Tok::Ident(name)) = self.peek().cloned() {
+                    self.advance();
+                    self.ren.bind(&name);
+                    self.em.emit(&self.ren.resolve(&name));
+                }
+            }
+            if self.eat_kw("in") { self.em.emit("in"); }
+            self.expr_list();
+        }
+
+        if self.eat_kw("do") { self.em.emit("do"); }
+        self.block(&["end"]);
+        if self.eat_kw("end") { self.em.emit("end"); }
+        self.ren.pop();
+    }
+
+    fn stmt_do(&mut self) {
+        self.advance(); self.em.emit("do");
+        self.ren.push();
+        self.block(&["end"]);
+        if self.eat_kw("end") { self.em.emit("end"); }
+        self.ren.pop();
+    }
+
+    fn stmt_return(&mut self) {
+        self.advance(); self.em.emit("return");
+        // return [exprs]
+        if self.pos < self.toks.len() {
+            if let Some(Tok::Keyword(k)) = self.peek() {
+                if k == "end" || k == "else" || k == "elseif" || k == "until" { return; }
+            }
+            if self.is_punct(";") { return; }
+            self.expr_list();
+        }
+    }
+
+    fn expr_stat(&mut self) {
+        // expression statement or assignment: expr [, expr] [= expr, expr]
+        self.expression();
+        // Check for , (multiple targets) or = or compound assign
+        if self.is_punct(",") || self.is_punct("=") ||
+           self.is_punct("+=") || self.is_punct("-=") || self.is_punct("*=") ||
+           self.is_punct("/=") || self.is_punct("%=") || self.is_punct("^=") ||
+           self.is_punct("..=")
+        {
+            while self.eat_punct(",") {
+                self.em.emit(",");
+                self.expression();
+            }
+            if let Some(Tok::Punct(p)) = self.peek().cloned() {
+                if p == "=" || p == "+=" || p == "-=" || p == "*=" || p == "/=" ||
+                   p == "%=" || p == "^=" || p == "..=" {
+                    self.advance();
+                    self.em.emit(&p);
+                    self.expr_list();
+                }
+            }
+        }
+    }
+
+    // ── Expressions ────────────────────────────────────────────────────
+
+    fn expr_list(&mut self) {
+        self.expression();
+        while self.eat_punct(",") {
+            self.em.emit(",");
+            self.expression();
+        }
+    }
+
+    fn expression(&mut self) {
+        self.unary_expr();
+        // Binary operators
+        loop {
+            if let Some(Tok::Keyword(k)) = self.peek() {
+                match k.as_str() {
+                    "and" | "or" => {
+                        let k = self.advance().unwrap();
+                        if let Tok::Keyword(w) = k { self.em.emit(&w); }
+                        self.unary_expr();
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(Tok::Punct(p)) = self.peek() {
+                match p.as_str() {
+                    "+" | "-" | "*" | "/" | "%" | "^" | ".." | "//" |
+                    "==" | "~=" | "<" | ">" | "<=" | ">=" | "<<" | ">>" |
+                    "&" | "|" | "~" => {
+                        let p = self.advance().unwrap();
+                        if let Tok::Punct(s) = p { self.em.emit(&s); }
+                        self.unary_expr();
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            break;
+        }
+    }
+
+    fn unary_expr(&mut self) {
+        if let Some(Tok::Keyword(k)) = self.peek() {
+            if k == "not" { self.advance(); self.em.emit("not"); self.unary_expr(); return; }
+        }
+        if let Some(Tok::Punct(p)) = self.peek() {
+            if p == "-" || p == "#" || p == "~" {
+                let p = self.advance().unwrap();
+                if let Tok::Punct(s) = p { self.em.emit(&s); }
+                self.unary_expr();
+                return;
+            }
+        }
+        self.primary_expr();
+    }
+
+    fn primary_expr(&mut self) {
+        // Atom
+        match self.peek().cloned() {
+            None => {}
+            Some(Tok::Number(n)) => { self.advance(); self.em.emit_number(&n); }
+            Some(Tok::StringLit(s)) => { self.advance(); self.em.emit(&s); }
+            Some(Tok::Keyword(k)) => {
+                match k.as_str() {
+                    "nil" | "true" | "false" => { self.advance(); self.em.emit(&k); }
+                    "function" => {
+                        // anonymous function
+                        self.advance();
+                        self.em.emit("function");
+                        self.func_body();
+                    }
+                    "if" => {
+                        // if-expression: if cond then expr [elseif cond then expr] else expr
+                        self.advance(); self.em.emit("if");
+                        self.expression();
+                        if self.eat_kw("then") { self.em.emit("then"); }
+                        self.expression();
+                        while self.eat_kw("elseif") {
+                            self.em.emit("elseif");
+                            self.expression();
+                            if self.eat_kw("then") { self.em.emit("then"); }
+                            self.expression();
+                        }
+                        if self.eat_kw("else") { self.em.emit("else"); }
+                        self.expression();
+                    }
+                    _ => {
+                        // shouldn't happen but emit as identifier
+                        self.advance(); self.em.emit(&k);
                     }
                 }
-                if let Some(else_block) = if_stmt.else_block() {
-                    self.push_scope();
-                    self.analyze_block(else_block);
-                    self.pop_scope();
+            }
+            Some(Tok::Ident(name)) => {
+                self.advance();
+                self.em.emit(&self.ren.resolve(&name));
+            }
+            Some(Tok::Punct(p)) => {
+                match p.as_str() {
+                    "(" => {
+                        self.advance(); self.em.emit("(");
+                        self.expression();
+                        if self.eat_punct(")") { self.em.emit(")"); }
+                    }
+                    "{" => { self.table_constructor(); }
+                    "..." => { self.advance(); self.em.emit("..."); }
+                    _ => { self.advance(); self.em.emit(&p); }
                 }
             }
-            Stmt::While(while_stmt) => {
-                self.analyze_expr(while_stmt.condition());
-                self.push_scope();
-                self.analyze_block(while_stmt.block());
-                self.pop_scope();
-            }
-            Stmt::Repeat(repeat) => {
-                self.push_scope();
-                self.analyze_block(repeat.block());
-                self.analyze_expr(repeat.until());
-                self.pop_scope();
-            }
-            Stmt::NumericFor(nf) => {
-                self.analyze_expr(nf.start());
-                self.analyze_expr(nf.end());
-                if let Some(step) = nf.step() {
-                    self.analyze_expr(step);
+        }
+
+        // Suffixes: .field, :method(), [index], (args), {table}, "string"
+        loop {
+            match self.peek().cloned() {
+                Some(Tok::Punct(p)) if p == "." => {
+                    self.advance(); self.em.emit(".");
+                    // field name — NOT renamed
+                    if let Some(Tok::Ident(f)) = self.peek().cloned() {
+                        self.advance(); self.em.emit(&f);
+                    } else if let Some(Tok::Keyword(k)) = self.peek().cloned() {
+                        // keyword used as field name (rare but valid in some contexts)
+                        self.advance(); self.em.emit(&k);
+                    }
                 }
-                self.push_scope();
-                self.bind_local(nf.index_variable());
-                self.analyze_block(nf.block());
-                self.pop_scope();
-            }
-            Stmt::GenericFor(gf) => {
-                for expr in gf.expressions().iter() {
-                    self.analyze_expr(expr);
+                Some(Tok::Punct(p)) if p == ":" => {
+                    self.advance(); self.em.emit(":");
+                    // method name — NOT renamed
+                    if let Some(Tok::Ident(m)) = self.peek().cloned() {
+                        self.advance(); self.em.emit(&m);
+                    } else if let Some(Tok::Keyword(k)) = self.peek().cloned() {
+                        self.advance(); self.em.emit(&k);
+                    }
+                    // call args
+                    if self.is_punct("(") {
+                        self.advance(); self.em.emit("(");
+                        self.call_args();
+                    } else if self.is_punct("{") {
+                        self.table_constructor();
+                    } else if let Some(Tok::StringLit(_)) = self.peek() {
+                        let s = self.advance().unwrap();
+                        if let Tok::StringLit(v) = s { self.em.emit(&v); }
+                    }
                 }
-                self.push_scope();
-                for pair in gf.names().pairs() {
-                    self.bind_local(pair.value());
+                Some(Tok::Punct(p)) if p == "[" => {
+                    self.advance(); self.em.emit("[");
+                    self.expression();
+                    if self.eat_punct("]") { self.em.emit("]"); }
                 }
-                self.analyze_block(gf.block());
-                self.pop_scope();
-            }
-            _ => {}
-        }
-    }
-
-    fn analyze_last_stmt(&mut self, stmt: &LastStmt) {
-        if let LastStmt::Return(ret) = stmt {
-            for expr in ret.returns().iter() {
-                self.analyze_expr(expr);
-            }
-        }
-    }
-
-    fn analyze_function_body(&mut self, body: &FunctionBody) {
-        self.push_scope();
-        for pair in body.parameters().pairs() {
-            match pair.value() {
-                Parameter::Name(name) => self.bind_local(name),
-                Parameter::Ellipsis(_) => {}
-                _ => {}
-            }
-        }
-        self.analyze_block(body.block());
-        self.pop_scope();
-    }
-
-    fn analyze_var(&mut self, var: &Var) {
-        match var {
-            Var::Name(name) => self.resolve_ref(name),
-            Var::Expression(expr) => {
-                self.analyze_prefix(expr.prefix());
-                for suffix in expr.suffixes() {
-                    self.analyze_suffix(suffix);
+                Some(Tok::Punct(p)) if p == "(" => {
+                    self.advance(); self.em.emit("(");
+                    self.call_args();
                 }
-            }
-            _ => {}
-        }
-    }
-
-    fn analyze_prefix(&mut self, prefix: &Prefix) {
-        match prefix {
-            Prefix::Name(name) => self.resolve_ref(name),
-            Prefix::Expression(expr) => self.analyze_expr(expr),
-            _ => {}
-        }
-    }
-
-    fn analyze_suffix(&mut self, suffix: &ast::Suffix) {
-        match suffix {
-            ast::Suffix::Call(call) => match call {
-                ast::Call::AnonymousCall(args) => self.analyze_function_args(args),
-                ast::Call::MethodCall(mc) => self.analyze_function_args(mc.args()),
-                _ => {}
-            },
-            ast::Suffix::Index(idx) => match idx {
-                ast::Index::Brackets { expression, .. } => self.analyze_expr(expression),
-                ast::Index::Dot { name, .. } => { let _ = name; } // field access, not a var ref
-                _ => {}
-            },
-            _ => {}
-        }
-    }
-
-    fn analyze_function_args(&mut self, args: &ast::FunctionArgs) {
-        match args {
-            ast::FunctionArgs::Parentheses { arguments, .. } => {
-                for expr in arguments.iter() {
-                    self.analyze_expr(expr);
+                Some(Tok::Punct(p)) if p == "{" => {
+                    self.table_constructor();
                 }
-            }
-            ast::FunctionArgs::String(_) => {}
-            ast::FunctionArgs::TableConstructor(tc) => self.analyze_table_constructor(tc),
-            _ => {}
-        }
-    }
-
-    fn analyze_function_call(&mut self, call: &ast::FunctionCall) {
-        self.analyze_prefix(call.prefix());
-        for suffix in call.suffixes() {
-            self.analyze_suffix(suffix);
-        }
-    }
-
-    fn analyze_expr(&mut self, expr: &Expression) {
-        match expr {
-            Expression::BinaryOperator { lhs, rhs, .. } => {
-                self.analyze_expr(lhs);
-                self.analyze_expr(rhs);
-            }
-            Expression::Parentheses { expression, .. } => {
-                self.analyze_expr(expression);
-            }
-            Expression::UnaryOperator { expression, .. } => {
-                self.analyze_expr(expression);
-            }
-            Expression::Function(f) => {
-                self.analyze_function_body(&f.1);
-            }
-            Expression::FunctionCall(call) => {
-                self.analyze_function_call(call);
-            }
-            Expression::TableConstructor(tc) => {
-                self.analyze_table_constructor(tc);
-            }
-            Expression::Number(_) | Expression::String(_) | Expression::Symbol(_) => {}
-            Expression::Var(var) => {
-                self.analyze_var(var);
-            }
-            _ => {}
-        }
-    }
-
-    fn analyze_table_constructor(&mut self, tc: &ast::TableConstructor) {
-        for field in tc.fields().iter() {
-            match field {
-                ast::Field::ExpressionKey { key, value, .. } => {
-                    self.analyze_expr(key);
-                    self.analyze_expr(value);
+                Some(Tok::StringLit(s)) => {
+                    // f"string" call syntax
+                    self.advance(); self.em.emit(&s);
                 }
-                ast::Field::NameKey { value, .. } => {
-                    self.analyze_expr(value);
-                }
-                ast::Field::NoKey(expr) => {
-                    self.analyze_expr(expr);
-                }
-                _ => {}
+                _ => break,
             }
         }
     }
-}
 
-// ── Phase 2: Token rewrite via VisitorMut ──────────────────────────────
-
-struct Renamer {
-    rename_map: HashMap<(usize, usize), String>,
-}
-
-impl Renamer {
-    fn rename_token(&self, token: TokenReference) -> TokenReference {
-        let pos = token_pos(&token);
-        if let Some(new_name) = self.rename_map.get(&pos) {
-            let new_token = Token::new(TokenType::Identifier {
-                identifier: new_name.as_str().into(),
-            });
-            let leading = minimize_trivia(token.leading_trivia().collect());
-            let trailing = minimize_trivia(token.trailing_trivia().collect());
-            TokenReference::new(leading, new_token, trailing)
-        } else {
-            strip_trivia_from_token(token)
-        }
+    fn call_args(&mut self) {
+        if self.is_punct(")") { self.advance(); self.em.emit(")"); return; }
+        self.expr_list();
+        if self.eat_punct(")") { self.em.emit(")"); }
     }
-}
 
-impl VisitorMut for Renamer {
-    fn visit_token_reference(&mut self, token: TokenReference) -> TokenReference {
-        let pos = token_pos(&token);
-        if self.rename_map.contains_key(&pos) {
-            self.rename_token(token)
-        } else {
-            strip_trivia_from_token(token)
+    fn table_constructor(&mut self) {
+        self.advance(); // {
+        self.em.emit("{");
+        loop {
+            if self.is_punct("}") { break; }
+
+            if self.is_punct("[") {
+                // [expr] = expr
+                self.advance(); self.em.emit("[");
+                self.expression();
+                if self.eat_punct("]") { self.em.emit("]"); }
+                if self.eat_punct("=") { self.em.emit("="); }
+                self.expression();
+            } else if let Some(Tok::Ident(_)) = self.peek() {
+                // Check if it's name = expr or just expr
+                let saved = self.pos;
+                self.advance(); // ident
+                if self.is_punct("=") {
+                    // name = expr — field name, don't rename
+                    self.pos = saved;
+                    let name = if let Some(Tok::Ident(n)) = self.peek().cloned() { self.advance(); n } else { String::new() };
+                    self.em.emit(&name);
+                    self.advance(); // =
+                    self.em.emit("=");
+                    self.expression();
+                } else {
+                    // Just an expression starting with ident
+                    self.pos = saved;
+                    self.expression();
+                }
+            } else {
+                self.expression();
+            }
+
+            if self.eat_punct(",") { self.em.emit(","); }
+            else if self.eat_punct(";") { self.em.emit(";"); }
+            else if !self.is_punct("}") { break; }
         }
-    }
-}
-
-// ── Trivia stripping ───────────────────────────────────────────────────
-
-fn strip_trivia_from_token(token: TokenReference) -> TokenReference {
-    let leading = minimize_trivia(token.leading_trivia().collect());
-    let trailing = minimize_trivia(token.trailing_trivia().collect());
-    TokenReference::new(leading, token.token().clone(), trailing)
-}
-
-/// Keep a single space if any whitespace existed (needed for token separation).
-/// Post-processing will remove unnecessary spaces.
-fn minimize_trivia(trivia: Vec<&Token>) -> Vec<Token> {
-    let has_whitespace = trivia.iter().any(|t| {
-        matches!(t.token_type(), TokenType::Whitespace { .. })
-    });
-    if has_whitespace {
-        vec![Token::new(TokenType::Whitespace { characters: " ".into() })]
-    } else {
-        Vec::new()
+        if self.eat_punct("}") { self.em.emit("}"); }
     }
 }
 
 // ── Public API ─────────────────────────────────────────────────────────
 
-/// Minify Lua source: rename locals to short names, strip whitespace/comments.
-pub fn minify(source: &str) -> String {
-    minify_with_options(source, false)
-}
-
-/// Minify with options. When `no_self` is true, `self` is treated as a normal
-/// local variable and will be renamed.
-pub fn minify_with_options(source: &str, no_self: bool) -> String {
-    let ast = match full_moon::parse(source) {
-        Ok(ast) => ast,
-        Err(_) => return source.to_string(),
-    };
-
-    // Phase 1: analyze scopes
-    let mut analyzer = ScopeAnalyzer::new(no_self);
-    analyzer.analyze_block(ast.nodes());
-
-    // Phase 2: rename + strip trivia
-    let mut renamer = Renamer {
-        rename_map: analyzer.rename_map,
-    };
-
-    let ast = renamer.visit_ast(ast);
-    let raw = ast.to_string();
-
-    // Post-process: insert spaces only where two adjacent tokens would merge.
-    // Two alphanumeric/underscore chars next to each other need a space.
-    // Also need space after keywords before `(` in some cases like `function(`.
-    // And between `-` `-` to avoid creating `--` (comment).
-    let bytes = raw.as_bytes();
-    let mut result = String::with_capacity(raw.len());
-
-    for (i, &b) in bytes.iter().enumerate() {
-        let ch = b as char;
-        if ch.is_ascii_whitespace() {
-            // Only emit a space if the previous and next non-whitespace chars
-            // would merge into an invalid token
-            if let (Some(&prev), Some(next)) = (result.as_bytes().last(), peek_nonws(bytes, i + 1)) {
-                if needs_space(prev, next) {
-                    result.push(' ');
-                }
-            }
-        } else {
-            result.push(ch);
-        }
-    }
-
-    result.trim().to_string()
-}
-
-/// Peek ahead past whitespace to find the next non-whitespace byte.
-fn peek_nonws(bytes: &[u8], start: usize) -> Option<u8> {
-    for &b in &bytes[start..] {
-        if !(b as char).is_ascii_whitespace() {
-            return Some(b);
-        }
-    }
-    None
-}
-
-/// Returns true if a space is needed between two adjacent characters.
-fn needs_space(prev: u8, next: u8) -> bool {
-    let p = prev as char;
-    let n = next as char;
-
-    // Two identifier/keyword chars would merge
-    if is_ident_char(p) && is_ident_char(n) {
-        return true;
-    }
-
-    // Prevent `--` (comment) from two minus signs
-    if p == '-' && n == '-' {
-        return true;
-    }
-
-    // Prevent `..` number ambiguity: `1 ..` vs `1..` (1.. could be parsed as 1. followed by .)
-    // Actually `..` is the concat operator, but `1..` is ambiguous with number `1.`
-    if p == '.' && n == '.' {
-        // Only if preceded by a digit context — but safer to just leave it
-        return false;
-    }
-
-    // Number followed by identifier start (e.g. `0x` is valid, but `3e` could be ambiguous)
-    // This is very rare in practice since our output is controlled
-
-    false
-}
-
-fn is_ident_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_'
+pub fn minify(source: &str, no_self: bool) -> String {
+    let tokens = tokenize(source);
+    let mut m = Minifier::new(tokens, no_self);
+    m.run();
+    m.em.out.trim().to_string()
 }

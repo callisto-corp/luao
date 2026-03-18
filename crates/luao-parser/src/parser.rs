@@ -72,37 +72,57 @@ impl Parser {
         }
 
         match self.current().kind {
-            TokenKind::Class => self.parse_class_decl(false, false),
-            TokenKind::Abstract => {
+            TokenKind::Class if self.peek_ahead(1).kind == TokenKind::Identifier || self.peek_ahead(1).kind.is_contextual_keyword() => self.parse_class_decl(false, false, false),
+            TokenKind::Abstract if self.peek_ahead(1).kind == TokenKind::Class => {
+                self.advance();
+                self.parse_class_decl(true, false, false)
+            }
+            TokenKind::Sealed if self.peek_ahead(1).kind == TokenKind::Class => {
+                self.advance();
+                self.parse_class_decl(false, true, false)
+            }
+            TokenKind::Extern if matches!(self.peek_ahead(1).kind, TokenKind::Class | TokenKind::Abstract | TokenKind::Sealed | TokenKind::Interface | TokenKind::Enum) => {
                 let start = self.current_span();
                 self.advance();
-                if self.check(TokenKind::Class) {
-                    self.parse_class_decl(true, false)
-                } else {
-                    Err(self.error_at(
+                match self.current().kind {
+                    TokenKind::Class => self.parse_class_decl(false, false, true),
+                    TokenKind::Abstract => {
+                        self.advance();
+                        if self.check(TokenKind::Class) {
+                            self.parse_class_decl(true, false, true)
+                        } else {
+                            Err(self.error_at(
+                                start,
+                                "expected 'class' after 'extern abstract'",
+                                ParseErrorKind::InvalidStatement,
+                            ))
+                        }
+                    }
+                    TokenKind::Sealed => {
+                        self.advance();
+                        if self.check(TokenKind::Class) {
+                            self.parse_class_decl(false, true, true)
+                        } else {
+                            Err(self.error_at(
+                                start,
+                                "expected 'class' after 'extern sealed'",
+                                ParseErrorKind::InvalidStatement,
+                            ))
+                        }
+                    }
+                    TokenKind::Interface => self.parse_interface_decl_with_extern(true),
+                    TokenKind::Enum => self.parse_enum_decl_with_extern(true),
+                    _ => Err(self.error_at(
                         start,
-                        "expected 'class' after 'abstract'",
+                        "expected 'class', 'interface', or 'enum' after 'extern'",
                         ParseErrorKind::InvalidStatement,
-                    ))
+                    )),
                 }
             }
-            TokenKind::Sealed => {
-                let start = self.current_span();
-                self.advance();
-                if self.check(TokenKind::Class) {
-                    self.parse_class_decl(false, true)
-                } else {
-                    Err(self.error_at(
-                        start,
-                        "expected 'class' after 'sealed'",
-                        ParseErrorKind::InvalidStatement,
-                    ))
-                }
-            }
-            TokenKind::Interface => self.parse_interface_decl(),
-            TokenKind::Enum => self.parse_enum_decl(),
-            TokenKind::Import => self.parse_import_decl(),
-            TokenKind::Export => self.parse_export_decl(),
+            TokenKind::Interface if self.peek_ahead(1).kind == TokenKind::Identifier || self.peek_ahead(1).kind.is_contextual_keyword() => self.parse_interface_decl_with_extern(false),
+            TokenKind::Enum => self.parse_enum_decl_with_extern(false),
+            TokenKind::Import if self.peek_ahead(1).kind == TokenKind::Identifier || self.peek_ahead(1).kind.is_contextual_keyword() => self.parse_import_decl(),
+            TokenKind::Export if matches!(self.peek_ahead(1).kind, TokenKind::Local | TokenKind::Function | TokenKind::Class | TokenKind::Abstract | TokenKind::Sealed | TokenKind::Extern | TokenKind::Enum | TokenKind::Interface | TokenKind::Type) => self.parse_export_decl(),
             TokenKind::Local => self.parse_local(),
             TokenKind::Function => self.parse_function_decl(false),
             TokenKind::If => self.parse_if_statement(),
@@ -130,6 +150,7 @@ impl Parser {
         &mut self,
         is_abstract: bool,
         is_sealed: bool,
+        is_extern: bool,
     ) -> ParseResult<Statement> {
         let start = self.current_span();
         self.expect(TokenKind::Class)?;
@@ -179,6 +200,7 @@ impl Parser {
             interfaces,
             is_abstract,
             is_sealed,
+            is_extern,
             members,
             span: start.merge(end),
         }))
@@ -517,11 +539,11 @@ impl Parser {
         let inner = match self.current().kind {
             TokenKind::Local => self.parse_local()?,
             TokenKind::Function => self.parse_function_decl(false)?,
-            TokenKind::Class => self.parse_class_decl(false, false)?,
+            TokenKind::Class => self.parse_class_decl(false, false, false)?,
             TokenKind::Abstract => {
                 self.advance();
                 if self.check(TokenKind::Class) {
-                    self.parse_class_decl(true, false)?
+                    self.parse_class_decl(true, false, false)?
                 } else {
                     return Err(self.error_at(
                         start,
@@ -533,7 +555,7 @@ impl Parser {
             TokenKind::Sealed => {
                 self.advance();
                 if self.check(TokenKind::Class) {
-                    self.parse_class_decl(false, true)?
+                    self.parse_class_decl(false, true, false)?
                 } else {
                     return Err(self.error_at(
                         start,
@@ -542,8 +564,47 @@ impl Parser {
                     ));
                 }
             }
-            TokenKind::Enum => self.parse_enum_decl()?,
-            TokenKind::Interface => self.parse_interface_decl()?,
+            TokenKind::Extern => {
+                self.advance();
+                match self.current().kind {
+                    TokenKind::Class => self.parse_class_decl(false, false, true)?,
+                    TokenKind::Abstract => {
+                        self.advance();
+                        if self.check(TokenKind::Class) {
+                            self.parse_class_decl(true, false, true)?
+                        } else {
+                            return Err(self.error_at(
+                                start,
+                                "expected 'class' after 'extern abstract'",
+                                ParseErrorKind::InvalidStatement,
+                            ));
+                        }
+                    }
+                    TokenKind::Sealed => {
+                        self.advance();
+                        if self.check(TokenKind::Class) {
+                            self.parse_class_decl(false, true, true)?
+                        } else {
+                            return Err(self.error_at(
+                                start,
+                                "expected 'class' after 'extern sealed'",
+                                ParseErrorKind::InvalidStatement,
+                            ));
+                        }
+                    }
+                    TokenKind::Interface => self.parse_interface_decl_with_extern(true)?,
+                    TokenKind::Enum => self.parse_enum_decl_with_extern(true)?,
+                    _ => {
+                        return Err(self.error_at(
+                            start,
+                            "expected 'class', 'interface', or 'enum' after 'extern'",
+                            ParseErrorKind::InvalidStatement,
+                        ));
+                    }
+                }
+            }
+            TokenKind::Enum => self.parse_enum_decl_with_extern(false)?,
+            TokenKind::Interface => self.parse_interface_decl_with_extern(false)?,
             TokenKind::Type => self.parse_type_alias()?,
             _ => {
                 return Err(self.error(
@@ -580,7 +641,7 @@ impl Parser {
         }))
     }
 
-    fn parse_interface_decl(&mut self) -> ParseResult<Statement> {
+    fn parse_interface_decl_with_extern(&mut self, is_extern: bool) -> ParseResult<Statement> {
         let start = self.current_span();
         self.expect(TokenKind::Interface)?;
         let name = self.expect_identifier()?;
@@ -603,13 +664,13 @@ impl Parser {
             Vec::new()
         };
 
-        let mut methods = Vec::new();
+        let mut members = Vec::new();
         while !self.check(TokenKind::End) && !self.is_at_end() {
             self.skip_semicolons();
             if self.check(TokenKind::End) {
                 break;
             }
-            methods.push(self.parse_interface_method()?);
+            members.push(self.parse_interface_member()?);
         }
 
         self.expect(TokenKind::End)?;
@@ -619,14 +680,13 @@ impl Parser {
             name,
             type_params,
             extends,
-            methods,
+            members,
+            is_extern,
             span: start.merge(end),
         }))
     }
 
-    fn parse_interface_method(&mut self) -> ParseResult<InterfaceMethod> {
-        let start = self.current_span();
-
+    fn parse_interface_member(&mut self) -> ParseResult<InterfaceMember> {
         let is_extern = if self.check(TokenKind::Extern) {
             self.advance();
             true
@@ -634,6 +694,28 @@ impl Parser {
             false
         };
 
+        // If next is `function`, it's a method
+        if self.check(TokenKind::Function) {
+            return Ok(InterfaceMember::Method(self.parse_interface_method_inner(is_extern)?));
+        }
+
+        // Otherwise it's a field: name: type
+        let start = self.current_span();
+        let name = self.expect_identifier()?;
+        self.expect(TokenKind::Colon)?;
+        let type_annotation = self.parse_type_annotation()?;
+        let end = self.previous_span();
+
+        Ok(InterfaceMember::Field(InterfaceField {
+            name,
+            type_annotation,
+            is_extern,
+            span: start.merge(end),
+        }))
+    }
+
+    fn parse_interface_method_inner(&mut self, is_extern: bool) -> ParseResult<InterfaceMethod> {
+        let start = self.current_span();
         self.expect(TokenKind::Function)?;
         let name = self.expect_identifier()?;
 
@@ -666,7 +748,7 @@ impl Parser {
         })
     }
 
-    fn parse_enum_decl(&mut self) -> ParseResult<Statement> {
+    fn parse_enum_decl_with_extern(&mut self, is_type_extern: bool) -> ParseResult<Statement> {
         let start = self.current_span();
         self.expect(TokenKind::Enum)?;
         let name = self.expect_identifier()?;
@@ -679,7 +761,9 @@ impl Parser {
             }
             let var_start = self.current_span();
 
-            let is_extern = if self.check(TokenKind::Extern) {
+            let is_extern = if is_type_extern {
+                true
+            } else if self.check(TokenKind::Extern) {
                 self.advance();
                 true
             } else {
@@ -710,6 +794,7 @@ impl Parser {
         Ok(Statement::EnumDecl(EnumDecl {
             name,
             variants,
+            is_extern: is_type_extern,
             span: start.merge(end),
         }))
     }
@@ -968,6 +1053,31 @@ impl Parser {
 
     fn parse_expr_or_assignment(&mut self) -> ParseResult<Statement> {
         let expr = self.parse_suffixed_expression()?;
+
+        // Check for compound assignment (+=, -=, etc.)
+        let compound_op = match self.current().kind {
+            TokenKind::PlusAssign => Some(CompoundOp::Add),
+            TokenKind::MinusAssign => Some(CompoundOp::Sub),
+            TokenKind::StarAssign => Some(CompoundOp::Mul),
+            TokenKind::SlashAssign => Some(CompoundOp::Div),
+            TokenKind::PercentAssign => Some(CompoundOp::Mod),
+            TokenKind::CaretAssign => Some(CompoundOp::Pow),
+            TokenKind::DotDotAssign => Some(CompoundOp::Concat),
+            _ => None,
+        };
+
+        if let Some(op) = compound_op {
+            let start = expr.span();
+            self.advance();
+            let value = self.parse_expression()?;
+            let end = self.previous_span();
+            return Ok(Statement::CompoundAssignment(CompoundAssignment {
+                target: expr,
+                op,
+                value,
+                span: start.merge(end),
+            }));
+        }
 
         if self.check(TokenKind::Assign) {
             let start = expr.span();
@@ -1488,6 +1598,35 @@ impl Parser {
                     span: start.merge(end),
                 })))
             }
+            // Luau if-expression: if cond then expr [elseif cond then expr]* else expr
+            TokenKind::If => {
+                let start = self.current_span();
+                self.advance();
+                let condition = self.parse_expression()?;
+                self.expect(TokenKind::Then)?;
+                let then_expr = self.parse_expression()?;
+
+                let mut elseif_clauses = Vec::new();
+                while self.check(TokenKind::ElseIf) {
+                    self.advance();
+                    let eif_cond = self.parse_expression()?;
+                    self.expect(TokenKind::Then)?;
+                    let eif_expr = self.parse_expression()?;
+                    elseif_clauses.push((eif_cond, eif_expr));
+                }
+
+                self.expect(TokenKind::Else)?;
+                let else_expr = self.parse_expression()?;
+                let end = self.previous_span();
+
+                Ok(Expression::IfExpression(Box::new(IfExpr {
+                    condition,
+                    then_expr,
+                    elseif_clauses,
+                    else_expr,
+                    span: start.merge(end),
+                })))
+            }
             _ if self.current().kind.is_contextual_keyword() => {
                 let token = self.current().clone();
                 self.advance();
@@ -1538,7 +1677,7 @@ impl Parser {
             let value = self.parse_expression()?;
             let end = value.span();
             Ok(TableField::IndexField(key, value, start.merge(end)))
-        } else if self.check(TokenKind::Identifier) && self.peek_ahead(1).kind == TokenKind::Assign
+        } else if (self.check(TokenKind::Identifier) || self.current().kind.is_contextual_keyword()) && self.peek_ahead(1).kind == TokenKind::Assign
         {
             let name = self.expect_identifier()?;
             self.expect(TokenKind::Assign)?;
@@ -1860,7 +1999,7 @@ impl Parser {
     }
 
     fn expect_identifier(&mut self) -> ParseResult<Identifier> {
-        if self.check(TokenKind::Identifier) {
+        if self.check(TokenKind::Identifier) || self.current().kind.is_contextual_keyword() {
             let token = self.current().clone();
             self.advance();
             Ok(Identifier {

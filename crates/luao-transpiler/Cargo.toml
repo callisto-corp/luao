@@ -9,4 +9,3 @@ luao-parser.workspace = true
 luao-resolver.workspace = true
 luao-checker.workspace = true
 smol_str.workspace = true
-full_moon = "1"

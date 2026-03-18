@@ -34,7 +34,7 @@ pub fn emit_class(emitter: &mut Emitter, class: &ClassDecl) {
         match member {
             ClassMember::Field(field) => {
                 if field.is_static {
-                    let field_name = member_output_name(emitter, &class_name, &field.name.name, field.access, field.is_extern);
+                    let field_name = member_output_name(emitter, &class_name, &field.name.name, field.access, field.is_extern || class.is_extern);
                     if let Some(ref val) = field.default_value {
                         let v = emit_expression(emitter, val);
                         emitter.writeln(&format!("{}.{} = {}", class_name, field_name, v));
@@ -47,7 +47,7 @@ pub fn emit_class(emitter: &mut Emitter, class: &ClassDecl) {
                 emit_constructor(emitter, class, ctor, &class_name, &parent_name);
             }
             ClassMember::Method(method) => {
-                emit_method(emitter, method, &class_name, &parent_name);
+                emit_method(emitter, method, &class_name, &parent_name, class.is_extern);
             }
             ClassMember::Property(_) => {}
         }
@@ -71,7 +71,7 @@ fn emit_constructor(
     parent_name: &Option<String>,
 ) {
     let params = emitter.emit_params(&ctor.params);
-    let new_name = emitter.mangle_shared("_new");
+    let new_name = if class.is_extern { "new".to_string() } else { emitter.mangle_shared("new") };
 
     emitter.writeln(&format!("function {}.{}({})", class_name, new_name, params));
     emitter.indent();
@@ -88,7 +88,7 @@ fn emit_constructor(
 
     if !has_super_call {
         if let Some(parent) = parent_name {
-            let parent_new = emitter.mangle_shared("_new");
+            let parent_new = emitter.mangle_shared("new");
             emitter.writeln(&format!("local self = {}.{}()", parent, parent_new));
             emitter.writeln(&format!("setmetatable(self, {})", class_name));
         } else {
@@ -97,6 +97,19 @@ fn emit_constructor(
     }
 
     emit_default_fields(emitter, class);
+
+    // Track constructor parameter types
+    for param in &ctor.params {
+        if param.is_vararg { continue; }
+        if let Some(ref ta) = param.type_annotation {
+            if let luao_parser::TypeKind::Named(ref type_name, _) = ta.kind {
+                let tn = type_name.name.to_string();
+                if emitter.is_class(&tn) {
+                    emitter.local_var_types.insert(param.name.name.to_string(), tn);
+                }
+            }
+        }
+    }
 
     for stmt in &ctor.body.statements {
         emit_constructor_statement(emitter, stmt, parent_name, class_name);
@@ -114,7 +127,7 @@ fn emit_default_constructor(
     class_name: &str,
     parent_name: &Option<String>,
 ) {
-    let new_name = emitter.mangle_shared("_new");
+    let new_name = if class.is_extern { "new".to_string() } else { emitter.mangle_shared("new") };
     emitter.writeln(&format!("function {}.{}()", class_name, new_name));
     emitter.indent();
 
@@ -126,7 +139,7 @@ fn emit_default_constructor(
     }
 
     if let Some(parent) = parent_name {
-        let parent_new = emitter.mangle_shared("_new");
+        let parent_new = if class.is_extern { "new".to_string() } else { emitter.mangle_shared("new") };
         emitter.writeln(&format!("local self = {}.{}()", parent, parent_new));
         emitter.writeln(&format!("setmetatable(self, {})", class_name));
     } else {
@@ -147,7 +160,7 @@ fn emit_default_fields(emitter: &mut Emitter, class: &ClassDecl) {
         if let ClassMember::Field(field) = member {
             if !field.is_static {
                 if let Some(ref val) = field.default_value {
-                    let field_name = member_output_name(emitter, &class_name, &field.name.name, field.access, field.is_extern);
+                    let field_name = member_output_name(emitter, &class_name, &field.name.name, field.access, field.is_extern || class.is_extern);
                     let v = emit_expression(emitter, val);
                     emitter.writeln(&format!("self.{} = {}", field_name, v));
                 }
@@ -184,7 +197,7 @@ fn emit_constructor_statement(
                             .map(|a| emit_expression(emitter, a))
                             .collect::<Vec<_>>()
                             .join(", ");
-                        let parent_new = emitter.mangle_shared("_new");
+                        let parent_new = emitter.mangle_shared("new");
                         emitter.writeln(&format!("local self = {}.{}({})", parent, parent_new, args));
                         emitter.writeln(&format!("setmetatable(self, {})", class_name));
                         return;
@@ -201,9 +214,10 @@ fn emit_method(
     method: &luao_parser::MethodDecl,
     class_name: &str,
     parent_name: &Option<String>,
+    class_is_extern: bool,
 ) {
     let original_name = method.name.name.to_string();
-    let method_name = member_output_name(emitter, class_name, &original_name, method.access, method.is_extern);
+    let method_name = member_output_name(emitter, class_name, &original_name, method.access, method.is_extern || class_is_extern);
     let params = emitter.emit_params(&method.params);
 
     let is_operator = original_name.starts_with("__");
@@ -257,6 +271,18 @@ fn emit_method(
     if let Some(ref body) = method.body {
         let saved_parent = emitter.current_class_parent.clone();
         emitter.current_class_parent = parent_name.clone();
+        // Track method parameter types
+        for param in &method.params {
+            if param.is_vararg { continue; }
+            if let Some(ref ta) = param.type_annotation {
+                if let luao_parser::TypeKind::Named(ref type_name, _) = ta.kind {
+                    let tn = type_name.name.to_string();
+                    if emitter.is_class(&tn) {
+                        emitter.local_var_types.insert(param.name.name.to_string(), tn);
+                    }
+                }
+            }
+        }
         emitter.emit_block(body);
         emitter.current_class_parent = saved_parent;
     }
