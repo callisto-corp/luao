@@ -5,3 +5,4 @@ out/
 *.lua
 !runtime/luao_runtime.lua
 !tests/expected/*.lua
+.claude/
