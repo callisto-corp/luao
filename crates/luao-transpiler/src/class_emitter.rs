@@ -4,30 +4,30 @@ use crate::emitter::Emitter;
 use crate::expression_emitter::emit_expression;
 
 pub fn emit_class(emitter: &mut Emitter, class: &ClassDecl) {
-    let class_name = class.name.name.to_string();
+    let class_name = emitter.rename_decl(&class.name.name);
     let parent_name = class
         .parent
         .as_ref()
-        .map(|p| p.name.name.to_string());
+        .map(|p| emitter.rename(&p.name.name));
 
     emitter.current_class = Some(class_name.clone());
     emitter.current_class_parent = parent_name.clone();
 
+    let local_prefix = if emitter.is_exported(&class_name) { "" } else { "local " };
     if let Some(ref parent) = parent_name {
         emitter.writeln(&format!(
-            "local {} = setmetatable({{}}, {{ __index = {} }})",
-            class_name, parent
+            "{}{} = setmetatable({{}}, {{ __index = {} }})",
+            local_prefix, class_name, parent
         ));
     } else {
-        emitter.writeln(&format!("local {} = {{}}", class_name));
+        emitter.writeln(&format!("{}{} = {{}}", local_prefix, class_name));
     }
     emitter.writeln(&format!("{}.__index = {}", class_name, class_name));
     emitter.newline();
 
-    let has_properties = class.members.iter().any(|m| matches!(m, ClassMember::Property(_)));
-    if has_properties {
-        emit_property_interceptors(emitter, class, &class_name);
-    }
+    emit_properties(emitter, class, &class_name);
+
+    let has_constructor = class.members.iter().any(|m| matches!(m, ClassMember::Constructor(_)));
 
     for member in &class.members {
         match member {
@@ -50,6 +50,11 @@ pub fn emit_class(emitter: &mut Emitter, class: &ClassDecl) {
             }
             ClassMember::Property(_) => {}
         }
+    }
+
+    // Generate default constructor if none was declared
+    if !has_constructor {
+        emit_default_constructor(emitter, class, &class_name, &parent_name);
     }
 
     emitter.current_class = None;
@@ -100,8 +105,39 @@ fn emit_constructor(
     emitter.newline();
 }
 
+fn emit_default_constructor(
+    emitter: &mut Emitter,
+    class: &ClassDecl,
+    class_name: &str,
+    parent_name: &Option<String>,
+) {
+    emitter.writeln(&format!("function {}._new()", class_name));
+    emitter.indent();
+
+    if class.is_abstract {
+        emitter.writeln(&format!(
+            "error(\"Cannot instantiate abstract class {}\")",
+            class_name
+        ));
+    }
+
+    if let Some(parent) = parent_name {
+        emitter.writeln(&format!("local self = {}._new()", parent));
+        emitter.writeln(&format!("setmetatable(self, {})", class_name));
+    } else {
+        emitter.writeln(&format!("local self = setmetatable({{}}, {})", class_name));
+    }
+
+    emit_default_fields(emitter, class);
+
+    emitter.writeln("return self");
+    emitter.dedent();
+    emitter.writeln("end");
+    emitter.newline();
+}
+
 fn emit_default_fields(emitter: &mut Emitter, class: &ClassDecl) {
-    let class_name = class.name.name.to_string();
+    let class_name = emitter.rename_decl(&class.name.name);
     for member in &class.members {
         if let ClassMember::Field(field) = member {
             if !field.is_static {
@@ -222,73 +258,91 @@ fn emit_method(
     emitter.newline();
 }
 
-fn emit_property_interceptors(emitter: &mut Emitter, class: &ClassDecl, class_name: &str) {
-    let mut getters = Vec::new();
-    let mut setters = Vec::new();
+/// Emit properties as compile-time methods. Non-extern properties become __get_/set_ methods.
+/// Extern properties keep the runtime __index/__newindex interceptor approach for external compatibility.
+fn emit_properties(emitter: &mut Emitter, class: &ClassDecl, class_name: &str) {
+    let mut extern_getters: Vec<String> = Vec::new();
+    let mut extern_setters: Vec<String> = Vec::new();
+
+    // Collect existing method names to avoid collisions
+    let method_names: std::collections::HashSet<String> = class
+        .members
+        .iter()
+        .filter_map(|m| {
+            if let ClassMember::Method(method) = m {
+                Some(method.name.name.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
 
     for member in &class.members {
         if let ClassMember::Property(prop) = member {
             let prop_name = prop.name.name.to_string();
+
+            // All properties get methods AND runtime interceptors.
+            // self.prop inside the class → compile-time method call (optimization).
+            // obj.prop from external code → runtime __index/__newindex interceptor.
             if prop.getter.is_some() {
-                getters.push(prop_name.clone());
+                extern_getters.push(prop_name.clone());
             }
             if prop.setter.is_some() {
-                setters.push(prop_name);
+                extern_setters.push(prop_name.clone());
+            }
+
+            if let Some(ref getter_body) = prop.getter {
+                let method_name = unique_getter_name(&prop_name, &method_names);
+                emitter.property_getters.insert(
+                    (class_name.to_string(), prop_name.clone()),
+                    method_name.clone(),
+                );
+                emitter.writeln(&format!("function {}:{}()", class_name, method_name));
+                emitter.emit_block(getter_body);
+                emitter.writeln("end");
+                emitter.newline();
+            }
+            if let Some((ref param, ref setter_body)) = prop.setter {
+                let method_name = unique_setter_name(&prop_name, &method_names);
+                emitter.property_setters.insert(
+                    (class_name.to_string(), prop_name.clone()),
+                    method_name.clone(),
+                );
+                emitter.writeln(&format!(
+                    "function {}:{}({})",
+                    class_name, method_name, param.name
+                ));
+                emitter.emit_block(setter_body);
+                emitter.writeln("end");
+                emitter.newline();
             }
         }
     }
 
-    if !getters.is_empty() {
-        emitter.writeln(&format!("{}.__getters = {{}}", class_name));
-        for member in &class.members {
-            if let ClassMember::Property(prop) = member {
-                if let Some(ref getter_body) = prop.getter {
-                    let prop_name = member_output_name(emitter, class_name, &prop.name.name, prop.access, prop.is_extern);
-                    emitter.writeln(&format!(
-                        "{}.__getters[\"{}\"] = function(self)",
-                        class_name, prop_name
-                    ));
-                    emitter.emit_block(getter_body);
-                    emitter.writeln("end");
-                }
-            }
-        }
-        emitter.newline();
-    }
-
-    if !setters.is_empty() {
-        emitter.writeln(&format!("{}.__setters = {{}}", class_name));
-        for member in &class.members {
-            if let ClassMember::Property(prop) = member {
-                if let Some((ref param, ref setter_body)) = prop.setter {
-                    let prop_name = member_output_name(emitter, class_name, &prop.name.name, prop.access, prop.is_extern);
-                    emitter.writeln(&format!(
-                        "{}.__setters[\"{}\"] = function(self, {})",
-                        class_name, prop_name, param.name
-                    ));
-                    emitter.emit_block(setter_body);
-                    emitter.writeln("end");
-                }
-            }
-        }
-        emitter.newline();
-    }
-
-    if !getters.is_empty() || !setters.is_empty() {
+    // Emit runtime interceptors ONLY for extern properties
+    if !extern_getters.is_empty() || !extern_setters.is_empty() {
         let original_index = format!("{}.__original_index", class_name);
         emitter.writeln(&format!("{} = {}.__index", original_index, class_name));
-        emitter.writeln(&format!(
-            "{}.__index = function(t, k)",
-            class_name
-        ));
+        emitter.writeln(&format!("{}.__index = function(t, k)", class_name));
         emitter.indent();
-        if !getters.is_empty() {
-            emitter.writeln(&format!(
-                "local getter = {}.__getters[k]",
-                class_name
-            ));
-            emitter.writeln("if getter then return getter(t) end");
+
+        for member in &class.members {
+            if let ClassMember::Property(prop) = member {
+                if prop.getter.is_some() {
+                    let prop_name = output_field_name(&prop.name.name, prop.access);
+                    let getter_method = emitter
+                        .property_getters
+                        .get(&(class_name.to_string(), prop.name.name.to_string()))
+                        .cloned()
+                        .unwrap_or_else(|| format!("__get_{}", prop_name));
+                    emitter.writeln(&format!(
+                        "if k == \"{}\" then return t:{}() end",
+                        prop_name, getter_method
+                    ));
+                }
+            }
         }
+
         emitter.writeln(&format!(
             "if type({}) == \"table\" then return {}[k] end",
             original_index, original_index
@@ -298,22 +352,62 @@ fn emit_property_interceptors(emitter: &mut Emitter, class: &ClassDecl, class_na
         emitter.writeln("end");
         emitter.newline();
 
-        if !setters.is_empty() {
-            emitter.writeln(&format!(
-                "{}.__newindex = function(t, k, v)",
-                class_name
-            ));
+        if !extern_setters.is_empty() {
+            emitter.writeln(&format!("{}.__newindex = function(t, k, v)", class_name));
             emitter.indent();
-            emitter.writeln(&format!(
-                "local setter = {}.__setters[k]",
-                class_name
-            ));
-            emitter.writeln("if setter then setter(t, v) return end");
+
+            for member in &class.members {
+                if let ClassMember::Property(prop) = member {
+                    if prop.setter.is_some() {
+                        let prop_name = output_field_name(&prop.name.name, prop.access);
+                        let setter_method = emitter
+                            .property_setters
+                            .get(&(class_name.to_string(), prop.name.name.to_string()))
+                            .cloned()
+                            .unwrap_or_else(|| format!("__set_{}", prop_name));
+                        emitter.writeln(&format!(
+                            "if k == \"{}\" then t:{}(v) return end",
+                            prop_name, setter_method
+                        ));
+                    }
+                }
+            }
+
             emitter.writeln("rawset(t, k, v)");
             emitter.dedent();
             emitter.writeln("end");
             emitter.newline();
         }
+    }
+}
+
+fn unique_getter_name(prop_name: &str, existing: &std::collections::HashSet<String>) -> String {
+    let candidate = format!("__get_{}", prop_name);
+    if !existing.contains(&candidate) {
+        return candidate;
+    }
+    let mut i = 2;
+    loop {
+        let candidate = format!("__get_{}_{}", prop_name, i);
+        if !existing.contains(&candidate) {
+            return candidate;
+        }
+        i += 1;
+    }
+}
+
+fn unique_setter_name(prop_name: &str, existing: &std::collections::HashSet<String>) -> String {
+    let candidate = format!("__set_{}", prop_name);
+    if !existing.contains(&candidate) {
+        return candidate;
+    }
+    let mut i = 2;
+    loop {
+        let candidate = format!("__set_{}_{}", prop_name, i);
+        if !existing.contains(&candidate) {
+            return candidate;
+        }
+        i += 1;
     }
 }
 

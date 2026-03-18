@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use luao_parser::{SourceFile, Statement};
 use luao_resolver::SymbolTable;
 
@@ -16,6 +18,19 @@ pub struct Emitter {
     pub(crate) current_class: Option<String>,
     pub(crate) current_class_parent: Option<String>,
     pub(crate) mangler: Option<Mangler>,
+    /// Names that are forward-declared externally (used in bundling).
+    /// When set, declarations for these names omit `local`.
+    pub(crate) exported_names: HashSet<String>,
+    /// Rename map for local variables (used in bundling to resolve name conflicts).
+    /// Maps original name → unique name. Applied to declarations and their references.
+    pub(crate) local_renames: HashMap<String, String>,
+    /// Import alias map (used in bundling). Maps alias → export name.
+    /// Only applied to identifier references, NOT to new local declarations.
+    pub(crate) import_aliases: HashMap<String, String>,
+    /// Properties with getters: (class_name, prop_name) → getter method name
+    pub(crate) property_getters: HashMap<(String, String), String>,
+    /// Properties with setters: (class_name, prop_name) → setter method name
+    pub(crate) property_setters: HashMap<(String, String), String>,
 }
 
 impl Emitter {
@@ -29,6 +44,11 @@ impl Emitter {
             current_class: None,
             current_class_parent: None,
             mangler,
+            exported_names: HashSet::new(),
+            local_renames: HashMap::new(),
+            import_aliases: HashMap::new(),
+            property_getters: HashMap::new(),
+            property_setters: HashMap::new(),
         }
     }
 
@@ -148,5 +168,30 @@ impl Emitter {
     /// Check if a name refers to a known enum in the symbol table.
     pub fn is_enum(&self, name: &str) -> bool {
         self.symbol_table.enums.contains_key(name)
+    }
+
+    /// Check if a name is exported (should skip `local` in bundled output).
+    pub fn is_exported(&self, name: &str) -> bool {
+        self.exported_names.contains(name)
+    }
+
+    /// Apply rename map for references (checks import aliases first, then local renames).
+    pub fn rename(&self, name: &str) -> String {
+        if let Some(alias_target) = self.import_aliases.get(name) {
+            return alias_target.clone();
+        }
+        self.local_renames
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    }
+
+    /// Apply rename map for declarations only (local renames, NOT import aliases).
+    /// Used when declaring a new local that might shadow an import.
+    pub fn rename_decl(&self, name: &str) -> String {
+        self.local_renames
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
     }
 }

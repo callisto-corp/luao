@@ -101,6 +101,8 @@ impl Parser {
             }
             TokenKind::Interface => self.parse_interface_decl(),
             TokenKind::Enum => self.parse_enum_decl(),
+            TokenKind::Import => self.parse_import_decl(),
+            TokenKind::Export => self.parse_export_decl(),
             TokenKind::Local => self.parse_local(),
             TokenKind::Function => self.parse_function_decl(false),
             TokenKind::If => self.parse_if_statement(),
@@ -456,6 +458,103 @@ impl Parser {
             is_extern,
             span: start.merge(end),
         }))
+    }
+
+    fn parse_import_decl(&mut self) -> ParseResult<Statement> {
+        let start = self.current_span();
+        self.expect(TokenKind::Import)?;
+
+        let mut names = Vec::new();
+        loop {
+            let name_start = self.current_span();
+            let name = self.expect_identifier()?;
+            let alias = if self.check(TokenKind::As) {
+                self.advance();
+                Some(self.expect_identifier()?)
+            } else {
+                None
+            };
+            let name_end = self.previous_span();
+            names.push(ImportName {
+                name,
+                alias,
+                span: name_start.merge(name_end),
+            });
+            if !self.check(TokenKind::Comma) {
+                break;
+            }
+            self.advance();
+        }
+
+        self.expect(TokenKind::From)?;
+
+        let path = if self.check(TokenKind::StringLiteral) {
+            let s = self.current().lexeme.clone();
+            self.advance();
+            // Strip quotes
+            let inner = &s[1..s.len() - 1];
+            smol_str::SmolStr::new(inner)
+        } else {
+            return Err(self.error(
+                "expected string path after 'from'",
+                ParseErrorKind::InvalidStatement,
+            ));
+        };
+
+        let end = self.previous_span();
+        Ok(Statement::ImportDecl(ImportDecl {
+            names,
+            path,
+            span: start.merge(end),
+        }))
+    }
+
+    fn parse_export_decl(&mut self) -> ParseResult<Statement> {
+        let start = self.current_span();
+        self.expect(TokenKind::Export)?;
+
+        // Parse the inner statement (local, function, class, enum, type)
+        let inner = match self.current().kind {
+            TokenKind::Local => self.parse_local()?,
+            TokenKind::Function => self.parse_function_decl(false)?,
+            TokenKind::Class => self.parse_class_decl(false, false)?,
+            TokenKind::Abstract => {
+                self.advance();
+                if self.check(TokenKind::Class) {
+                    self.parse_class_decl(true, false)?
+                } else {
+                    return Err(self.error_at(
+                        start,
+                        "expected 'class' after 'abstract'",
+                        ParseErrorKind::InvalidStatement,
+                    ));
+                }
+            }
+            TokenKind::Sealed => {
+                self.advance();
+                if self.check(TokenKind::Class) {
+                    self.parse_class_decl(false, true)?
+                } else {
+                    return Err(self.error_at(
+                        start,
+                        "expected 'class' after 'sealed'",
+                        ParseErrorKind::InvalidStatement,
+                    ));
+                }
+            }
+            TokenKind::Enum => self.parse_enum_decl()?,
+            TokenKind::Interface => self.parse_interface_decl()?,
+            TokenKind::Type => self.parse_type_alias()?,
+            _ => {
+                return Err(self.error(
+                    "expected declaration after 'export'",
+                    ParseErrorKind::InvalidStatement,
+                ));
+            }
+        };
+
+        let end = self.previous_span();
+        Ok(Statement::ExportDecl(Box::new(inner), start.merge(end)))
     }
 
     fn parse_type_alias(&mut self) -> ParseResult<Statement> {

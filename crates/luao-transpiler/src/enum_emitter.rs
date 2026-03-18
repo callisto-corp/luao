@@ -5,7 +5,7 @@ use crate::expression_emitter::emit_expression;
 
 pub fn emit_enum(emitter: &mut Emitter, enum_decl: &EnumDecl) {
     emitter.needs_enum_freeze = true;
-    let name = enum_decl.name.name.to_string();
+    let name = emitter.rename_decl(&enum_decl.name.name);
 
     let mut entries = Vec::new();
     let mut reverse_entries = Vec::new();
@@ -31,9 +31,10 @@ pub fn emit_enum(emitter: &mut Emitter, enum_decl: &EnumDecl) {
         reverse_entries.push(format!("[{}] = \"{}\"", value, output_name));
     }
 
+    let local_prefix = if emitter.is_exported(&name) { "" } else { "local " };
     emitter.writeln(&format!(
-        "local {} = {{ {} }}",
-        name,
+        "{}{} = {{ {} }}",
+        local_prefix, name,
         entries.join(", ")
     ));
     emitter.writeln(&format!(

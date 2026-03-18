@@ -1,3 +1,4 @@
+pub mod bundler;
 pub mod class_emitter;
 pub mod emitter;
 pub mod enum_emitter;

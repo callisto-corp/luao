@@ -288,6 +288,14 @@ fn check_access_in_statement(
                     ClassMember::Constructor(c) => {
                         check_access_in_block(&c.body, Some(class_name), symbols, diagnostics);
                     }
+                    ClassMember::Property(p) => {
+                        if let Some(ref getter) = p.getter {
+                            check_access_in_block(getter, Some(class_name), symbols, diagnostics);
+                        }
+                        if let Some((_, ref setter)) = p.setter {
+                            check_access_in_block(setter, Some(class_name), symbols, diagnostics);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -334,43 +342,60 @@ fn check_access_in_expr(
 ) {
     if let Expression::FieldAccess(fa) = expr {
         let field_name = fa.field.name.as_str();
-        for cls in symbols.classes.values() {
-            if let Some(field) = cls.fields.iter().find(|f| f.name == field_name) {
-                match field.access {
-                    AccessModifier::Private => {
-                        if current_class != Some(cls.name.as_str()) {
-                            diagnostics.push(Diagnostic::error(
-                                format!(
-                                    "cannot access private field '{}' of class '{}'",
-                                    field_name, cls.name
-                                ),
-                                fa.span,
-                                "E006",
-                            ));
-                        }
-                    }
-                    AccessModifier::Protected => {
-                        let is_self = current_class == Some(cls.name.as_str());
-                        let is_subclass = current_class.map_or(false, |cur| {
-                            symbols
-                                .lookup_class(cur)
-                                .and_then(|c| c.parent.as_deref())
-                                .map_or(false, |p| p == cls.name)
-                        });
-                        if !is_self && !is_subclass {
-                            diagnostics.push(Diagnostic::error(
-                                format!(
-                                    "cannot access protected field '{}' of class '{}'",
-                                    field_name, cls.name
-                                ),
-                                fa.span,
-                                "E006",
-                            ));
-                        }
-                    }
-                    AccessModifier::Public => {}
+
+        // Determine which class the field access is on
+        let target_class = match &fa.object {
+            Expression::Identifier(id) if id.name.as_str() == "self" => current_class,
+            Expression::Identifier(id) => {
+                // ClassName.field — check if it's a known class
+                let name = id.name.as_str();
+                if symbols.classes.contains_key(name) {
+                    Some(name)
+                } else {
+                    None // Unknown object, can't check
                 }
-                break;
+            }
+            _ => None,
+        };
+
+        if let Some(target) = target_class {
+            if let Some(cls) = symbols.lookup_class(target) {
+                if let Some(field) = cls.fields.iter().find(|f| f.name == field_name) {
+                    match field.access {
+                        AccessModifier::Private => {
+                            if current_class != Some(cls.name.as_str()) {
+                                diagnostics.push(Diagnostic::error(
+                                    format!(
+                                        "cannot access private field '{}' of class '{}'",
+                                        field_name, cls.name
+                                    ),
+                                    fa.span,
+                                    "E006",
+                                ));
+                            }
+                        }
+                        AccessModifier::Protected => {
+                            let is_self = current_class == Some(cls.name.as_str());
+                            let is_subclass = current_class.map_or(false, |cur| {
+                                symbols
+                                    .lookup_class(cur)
+                                    .and_then(|c| c.parent.as_deref())
+                                    .map_or(false, |p| p == cls.name)
+                            });
+                            if !is_self && !is_subclass {
+                                diagnostics.push(Diagnostic::error(
+                                    format!(
+                                        "cannot access protected field '{}' of class '{}'",
+                                        field_name, cls.name
+                                    ),
+                                    fa.span,
+                                    "E006",
+                                ));
+                            }
+                        }
+                        AccessModifier::Public => {}
+                    }
+                }
             }
         }
     }
@@ -535,6 +560,98 @@ fn check_super_in_expr(
         }
         _ => {}
     }
+}
+
+// --- E014: Import name shadowing ---
+
+pub fn check_import_shadowing(
+    file: &SourceFile,
+    _symbols: &SymbolTable,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+
+    // Collect all imported names (including aliases)
+    let mut imported_names: HashMap<String, luao_lexer::Span> = HashMap::new();
+    for stmt in &file.statements {
+        if let Statement::ImportDecl(import) = stmt {
+            for name in &import.names {
+                let local_name = name
+                    .alias
+                    .as_ref()
+                    .map(|a| a.name.to_string())
+                    .unwrap_or_else(|| name.name.name.to_string());
+                imported_names.insert(local_name, import.span);
+            }
+        }
+    }
+
+    if imported_names.is_empty() {
+        return diagnostics;
+    }
+
+    // Check top-level declarations for shadowing
+    for stmt in &file.statements {
+        let declared_names: Vec<(String, luao_lexer::Span)> = match stmt {
+            Statement::LocalAssignment(la) => {
+                la.names.iter().map(|n| (n.name.to_string(), n.span)).collect()
+            }
+            Statement::FunctionDecl(fd) => {
+                if fd.is_local {
+                    if let Some(part) = fd.name.parts.first() {
+                        vec![(part.name.to_string(), part.span)]
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    vec![]
+                }
+            }
+            Statement::ClassDecl(cd) => {
+                vec![(cd.name.name.to_string(), cd.name.span)]
+            }
+            Statement::EnumDecl(ed) => {
+                vec![(ed.name.name.to_string(), ed.name.span)]
+            }
+            Statement::ExportDecl(inner, _) => {
+                // Check inside export too
+                match inner.as_ref() {
+                    Statement::LocalAssignment(la) => {
+                        la.names.iter().map(|n| (n.name.to_string(), n.span)).collect()
+                    }
+                    Statement::FunctionDecl(fd) => {
+                        if let Some(part) = fd.name.parts.first() {
+                            vec![(part.name.to_string(), part.span)]
+                        } else {
+                            vec![]
+                        }
+                    }
+                    Statement::ClassDecl(cd) => {
+                        vec![(cd.name.name.to_string(), cd.name.span)]
+                    }
+                    Statement::EnumDecl(ed) => {
+                        vec![(ed.name.name.to_string(), ed.name.span)]
+                    }
+                    _ => vec![],
+                }
+            }
+            _ => vec![],
+        };
+
+        for (name, span) in declared_names {
+            if imported_names.contains_key(&name) {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "cannot declare '{}' — it shadows an imported name; use 'as' to alias the import",
+                        name
+                    ),
+                    span,
+                    "E014",
+                ));
+            }
+        }
+    }
+
+    diagnostics
 }
 
 // --- E013: Union type member access ---

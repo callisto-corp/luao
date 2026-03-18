@@ -10,7 +10,7 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
         Expression::Number(n, _) => n.to_string(),
         Expression::String(s, _) => s.to_string(),
         Expression::Vararg(_) => "...".to_string(),
-        Expression::Identifier(id) => id.name.to_string(),
+        Expression::Identifier(id) => emitter.rename(&id.name),
         Expression::BinaryOp(bin) => {
             let left = emit_expression(emitter, &bin.left);
             let right = emit_expression(emitter, &bin.right);
@@ -47,6 +47,17 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
             format!("{}:{}({})", object, method_name, args)
         }
         Expression::FieldAccess(fa) => {
+            // Check if this is a property getter access (self.prop where prop has a getter)
+            if let Expression::Identifier(id) = &fa.object {
+                if id.name.as_str() == "self" {
+                    if let Some(class_name) = emitter.current_class.clone() {
+                        let prop_key = (class_name, fa.field.name.to_string());
+                        if let Some(getter_method) = emitter.property_getters.get(&prop_key).cloned() {
+                            return format!("self:{}()", getter_method);
+                        }
+                    }
+                }
+            }
             let object = emit_expression(emitter, &fa.object);
             let field_name = maybe_mangle_access(emitter, &fa.object, &fa.field.name);
             format!("{}.{}", object, field_name)
@@ -93,7 +104,8 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
         Expression::Instanceof(inst) => {
             emitter.needs_instanceof = true;
             let obj = emit_expression(emitter, &inst.object);
-            format!("__luao_instanceof({}, {})", obj, inst.class_name.name)
+            let class_name = emitter.rename(&inst.class_name.name);
+            format!("__luao_instanceof({}, {})", obj, class_name)
         }
         Expression::SuperAccess(sa) => {
             let parent = emitter
@@ -112,7 +124,7 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
             }
         }
         Expression::NewExpr(ne) => {
-            let class_name = ne.class_name.name.name.to_string();
+            let class_name = emitter.rename(&ne.class_name.name.name);
             let args = emit_args(emitter, &ne.args);
             format!("{}._new({})", class_name, args)
         }

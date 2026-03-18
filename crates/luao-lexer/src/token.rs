@@ -54,6 +54,9 @@ pub enum TokenKind {
     Extern,
     As,
     Type,
+    Import,
+    Export,
+    From,
 
     Identifier,
     Number,
@@ -151,6 +154,9 @@ impl TokenKind {
             "extern" => Some(TokenKind::Extern),
             "as" => Some(TokenKind::As),
             "type" => Some(TokenKind::Type),
+            "import" => Some(TokenKind::Import),
+            "export" => Some(TokenKind::Export),
+            "from" => Some(TokenKind::From),
             _ => None,
         }
     }
@@ -201,6 +207,9 @@ impl TokenKind {
                 | TokenKind::Extern
                 | TokenKind::As
                 | TokenKind::Type
+                | TokenKind::Import
+                | TokenKind::Export
+                | TokenKind::From
         )
     }
 }
@@ -251,6 +260,9 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Extern => write!(f, "extern"),
             TokenKind::As => write!(f, "as"),
             TokenKind::Type => write!(f, "type"),
+            TokenKind::Import => write!(f, "import"),
+            TokenKind::Export => write!(f, "export"),
+            TokenKind::From => write!(f, "from"),
             TokenKind::Identifier => write!(f, "identifier"),
             TokenKind::Number => write!(f, "number"),
             TokenKind::StringLiteral => write!(f, "string"),

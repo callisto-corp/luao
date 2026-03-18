@@ -8,9 +8,14 @@ use crate::expression_emitter::emit_expression;
 pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
     match stmt {
         Statement::LocalAssignment(la) => {
-            let names: Vec<_> = la.names.iter().map(|n| n.name.to_string()).collect();
+            let names: Vec<_> = la.names.iter().map(|n| emitter.rename_decl(&n.name)).collect();
+            // If all names are exported (forward-declared), skip `local`
+            let all_exported = names.iter().all(|n| emitter.is_exported(n));
+            let prefix = if all_exported { "" } else { "local " };
             if la.values.is_empty() {
-                emitter.writeln(&format!("local {}", names.join(", ")));
+                if !all_exported {
+                    emitter.writeln(&format!("{}{}", prefix, names.join(", ")));
+                }
             } else {
                 let values: Vec<_> = la
                     .values
@@ -18,13 +23,31 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
                     .map(|v| emit_expression(emitter, v))
                     .collect();
                 emitter.writeln(&format!(
-                    "local {} = {}",
+                    "{}{} = {}",
+                    prefix,
                     names.join(", "),
                     values.join(", ")
                 ));
             }
         }
         Statement::Assignment(assign) => {
+            // Check for property setter: self.prop = val → self:__set_prop(val)
+            if assign.targets.len() == 1 && assign.values.len() == 1 {
+                if let luao_parser::Expression::FieldAccess(fa) = &assign.targets[0] {
+                    if let luao_parser::Expression::Identifier(id) = &fa.object {
+                        if id.name.as_str() == "self" {
+                            if let Some(class_name) = emitter.current_class.clone() {
+                                let prop_key = (class_name, fa.field.name.to_string());
+                                if let Some(setter_method) = emitter.property_setters.get(&prop_key).cloned() {
+                                    let val = emit_expression(emitter, &assign.values[0]);
+                                    emitter.writeln(&format!("self:{}({})", setter_method, val));
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             let targets: Vec<_> = assign
                 .targets
                 .iter()
@@ -38,9 +61,9 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
             emitter.writeln(&format!("{} = {}", targets.join(", "), values.join(", ")));
         }
         Statement::FunctionDecl(fd) => {
-            let name = emit_function_name(fd);
+            let name = emit_function_name(emitter, fd);
             let params = emitter.emit_params(&fd.params);
-            if fd.is_local {
+            if fd.is_local && !emitter.is_exported(&name) {
                 emitter.writeln(&format!("local function {}({})", name, params));
             } else {
                 emitter.writeln(&format!("function {}({})", name, params));
@@ -131,6 +154,13 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
         Statement::TypeAlias(_) => {
             // Type aliases are erased at compile time
         }
+        Statement::ImportDecl(_) => {
+            // Imports are handled by the bundler; in non-bundled builds, they're erased
+        }
+        Statement::ExportDecl(inner, _) => {
+            // In non-bundled builds, just emit the inner statement
+            emitter.emit_statement(inner);
+        }
         Statement::ExpressionStatement(expr) => {
             let e = emit_expression(emitter, expr);
             emitter.writeln(&e);
@@ -145,14 +175,21 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
     }
 }
 
-fn emit_function_name(fd: &luao_parser::FunctionDecl) -> String {
-    let mut name = fd
+fn emit_function_name(emitter: &Emitter, fd: &luao_parser::FunctionDecl) -> String {
+    let parts: Vec<String> = fd
         .name
         .parts
         .iter()
-        .map(|p| p.name.to_string())
-        .collect::<Vec<_>>()
-        .join(".");
+        .enumerate()
+        .map(|(i, p)| {
+            if i == 0 {
+                emitter.rename(&p.name)
+            } else {
+                p.name.to_string()
+            }
+        })
+        .collect();
+    let mut name = parts.join(".");
     if let Some(method) = &fd.name.method {
         name.push(':');
         name.push_str(&method.name);

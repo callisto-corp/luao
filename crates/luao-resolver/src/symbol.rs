@@ -60,7 +60,7 @@ pub struct EnumSymbol {
     pub variants: Vec<(String, Option<i64>)>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SymbolTable {
     pub classes: HashMap<String, ClassSymbol>,
     pub interfaces: HashMap<String, InterfaceSymbol>,

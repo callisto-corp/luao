@@ -38,6 +38,7 @@ impl Resolver {
             Statement::ClassDecl(class_decl) => self.resolve_class(class_decl),
             Statement::InterfaceDecl(iface_decl) => self.resolve_interface(iface_decl),
             Statement::EnumDecl(enum_decl) => self.resolve_enum(enum_decl),
+            Statement::ExportDecl(inner, _) => self.resolve_statement(inner),
             _ => {}
         }
     }

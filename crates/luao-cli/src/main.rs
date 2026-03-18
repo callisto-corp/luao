@@ -21,6 +21,20 @@ enum Commands {
         #[arg(long)]
         mangle: bool,
     },
+    /// Bundle a Luao project into a single file, resolving imports
+    Bundle {
+        /// Entry point file
+        path: String,
+        /// Output file path
+        #[arg(short, long)]
+        output: String,
+        /// Minify the output
+        #[arg(long)]
+        minify: bool,
+        /// Mangle property names
+        #[arg(long)]
+        mangle: bool,
+    },
     Check {
         path: String,
     },
@@ -39,6 +53,15 @@ async fn main() {
         } => {
             let options = TranspileOptions { minify, mangle };
             build(&path, &options);
+        }
+        Commands::Bundle {
+            path,
+            output,
+            minify,
+            mangle,
+        } => {
+            let options = TranspileOptions { minify, mangle };
+            bundle_cmd(&path, &output, &options);
         }
         Commands::Check { path } => check(&path),
         Commands::Lsp => start_lsp().await,
@@ -96,6 +119,27 @@ fn build_file(path: &Path, options: &TranspileOptions) {
             for error in &errors {
                 eprintln!("  {}", error);
             }
+        }
+    }
+}
+
+fn bundle_cmd(path: &str, output: &str, options: &TranspileOptions) {
+    let input = Path::new(path);
+
+    match luao_transpiler::bundler::bundle(input, options) {
+        Ok(code) => {
+            let output_path = Path::new(output);
+            match std::fs::write(output_path, &code) {
+                Ok(_) => println!("Bundled: {} -> {}", input.display(), output_path.display()),
+                Err(e) => eprintln!("Failed to write {}: {}", output_path.display(), e),
+            }
+        }
+        Err(errors) => {
+            eprintln!("Bundle errors:");
+            for error in &errors {
+                eprintln!("  {}", error);
+            }
+            std::process::exit(1);
         }
     }
 }

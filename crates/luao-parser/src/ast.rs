@@ -19,6 +19,8 @@ pub enum Statement {
     InterfaceDecl(InterfaceDecl),
     EnumDecl(EnumDecl),
     TypeAlias(TypeAliasDecl),
+    ImportDecl(ImportDecl),
+    ExportDecl(Box<Statement>, Span),
     LocalAssignment(LocalAssignment),
     Assignment(Assignment),
     FunctionDecl(FunctionDecl),
@@ -32,6 +34,20 @@ pub enum Statement {
     Break(Span),
     Continue(Span),
     ExpressionStatement(Expression),
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportDecl {
+    pub names: Vec<ImportName>,
+    pub path: SmolStr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportName {
+    pub name: Identifier,
+    pub alias: Option<Identifier>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

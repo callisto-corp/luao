@@ -122,7 +122,7 @@
       }
     },
     "luao-keywords": {
-      "match": "\\b(class|extends|implements|interface|abstract|static|public|private|protected|readonly|super|new|enum|sealed|get|set|override|instanceof|extern|as|type|continue)\\b",
+      "match": "\\b(class|extends|implements|interface|abstract|static|public|private|protected|readonly|super|new|enum|sealed|get|set|override|instanceof|extern|as|type|continue|import|export|from)\\b",
       "name": "keyword.other.luao"
     },
     "lua-keywords": {
