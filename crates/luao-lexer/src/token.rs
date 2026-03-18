@@ -51,6 +51,7 @@ pub enum TokenKind {
     Set,
     Override,
     Instanceof,
+    Extern,
 
     Identifier,
     Number,
@@ -145,6 +146,7 @@ impl TokenKind {
             "set" => Some(TokenKind::Set),
             "override" => Some(TokenKind::Override),
             "instanceof" => Some(TokenKind::Instanceof),
+            "extern" => Some(TokenKind::Extern),
             _ => None,
         }
     }
@@ -192,6 +194,7 @@ impl TokenKind {
                 | TokenKind::Set
                 | TokenKind::Override
                 | TokenKind::Instanceof
+                | TokenKind::Extern
         )
     }
 }
@@ -239,6 +242,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Set => write!(f, "set"),
             TokenKind::Override => write!(f, "override"),
             TokenKind::Instanceof => write!(f, "instanceof"),
+            TokenKind::Extern => write!(f, "extern"),
             TokenKind::Identifier => write!(f, "identifier"),
             TokenKind::Number => write!(f, "number"),
             TokenKind::StringLiteral => write!(f, "string"),

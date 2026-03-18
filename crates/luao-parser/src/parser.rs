@@ -193,6 +193,7 @@ impl Parser {
         let mut is_abstract = false;
         let mut is_override = false;
         let mut is_readonly = false;
+        let mut is_extern = false;
 
         loop {
             match self.current().kind {
@@ -224,6 +225,10 @@ impl Parser {
                     is_readonly = true;
                     self.advance();
                 }
+                TokenKind::Extern => {
+                    is_extern = true;
+                    self.advance();
+                }
                 _ => break,
             }
         }
@@ -235,22 +240,22 @@ impl Parser {
         if self.check(TokenKind::Get) {
             let next = self.peek_ahead(1);
             if next.kind == TokenKind::Identifier {
-                return self.parse_property(access);
+                return self.parse_property(access, is_extern);
             }
         }
 
         if self.check(TokenKind::Set) {
             let next = self.peek_ahead(1);
             if next.kind == TokenKind::Identifier {
-                return self.parse_property_setter_only(access);
+                return self.parse_property_setter_only(access, is_extern);
             }
         }
 
         if self.check(TokenKind::Function) {
-            return self.parse_method(access, is_static, is_abstract, is_override);
+            return self.parse_method(access, is_static, is_abstract, is_override, is_extern);
         }
 
-        self.parse_field(access, is_static, is_readonly)
+        self.parse_field(access, is_static, is_readonly, is_extern)
     }
 
     fn parse_constructor(&mut self, access: AccessModifier) -> ParseResult<ClassMember> {
@@ -277,6 +282,7 @@ impl Parser {
         is_static: bool,
         is_abstract: bool,
         is_override: bool,
+        is_extern: bool,
     ) -> ParseResult<ClassMember> {
         let start = self.current_span();
         self.expect(TokenKind::Function)?;
@@ -319,6 +325,7 @@ impl Parser {
             is_static,
             is_abstract,
             is_override,
+            is_extern,
             span: start.merge(end),
         }))
     }
@@ -328,6 +335,7 @@ impl Parser {
         access: AccessModifier,
         is_static: bool,
         is_readonly: bool,
+        is_extern: bool,
     ) -> ParseResult<ClassMember> {
         let start = self.current_span();
         let name = self.expect_identifier()?;
@@ -355,11 +363,12 @@ impl Parser {
             access,
             is_static,
             is_readonly,
+            is_extern,
             span: start.merge(end),
         }))
     }
 
-    fn parse_property(&mut self, access: AccessModifier) -> ParseResult<ClassMember> {
+    fn parse_property(&mut self, access: AccessModifier, is_extern: bool) -> ParseResult<ClassMember> {
         let start = self.current_span();
         self.expect(TokenKind::Get)?;
         let name = self.expect_identifier()?;
@@ -423,11 +432,12 @@ impl Parser {
             getter: Some(getter_body),
             setter,
             access,
+            is_extern,
             span: start.merge(end),
         }))
     }
 
-    fn parse_property_setter_only(&mut self, access: AccessModifier) -> ParseResult<ClassMember> {
+    fn parse_property_setter_only(&mut self, access: AccessModifier, is_extern: bool) -> ParseResult<ClassMember> {
         let start = self.current_span();
         self.expect(TokenKind::Set)?;
         let name = self.expect_identifier()?;
@@ -448,6 +458,7 @@ impl Parser {
             getter: None,
             setter: Some((param, body)),
             access,
+            is_extern,
             span: start.merge(end),
         }))
     }

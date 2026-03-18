@@ -3,6 +3,7 @@ use luao_resolver::SymbolTable;
 
 use crate::class_emitter;
 use crate::enum_emitter;
+use crate::mangler::Mangler;
 use crate::runtime;
 use crate::statement_emitter;
 
@@ -14,10 +15,11 @@ pub struct Emitter {
     pub(crate) needs_enum_freeze: bool,
     pub(crate) current_class: Option<String>,
     pub(crate) current_class_parent: Option<String>,
+    pub(crate) mangler: Option<Mangler>,
 }
 
 impl Emitter {
-    pub fn new(symbol_table: SymbolTable) -> Self {
+    pub fn new(symbol_table: SymbolTable, mangler: Option<Mangler>) -> Self {
         Self {
             output: String::new(),
             indent_level: 0,
@@ -26,6 +28,7 @@ impl Emitter {
             needs_enum_freeze: false,
             current_class: None,
             current_class_parent: None,
+            mangler,
         }
     }
 
@@ -119,5 +122,31 @@ impl Emitter {
             })
             .collect::<Vec<_>>()
             .join(", ")
+    }
+
+    /// Mangle a member name for the given type. Returns the original name if mangling is disabled.
+    pub fn mangle_member(&mut self, type_name: &str, member_name: &str) -> String {
+        if let Some(ref mut mangler) = self.mangler {
+            mangler.mangle(type_name, member_name)
+        } else {
+            member_name.to_string()
+        }
+    }
+
+    /// Look up an already-mangled name without creating a new mapping.
+    pub fn lookup_mangled(&self, type_name: &str, member_name: &str) -> Option<String> {
+        self.mangler
+            .as_ref()
+            .and_then(|m| m.lookup(type_name, member_name))
+    }
+
+    /// Check if a name refers to a known class in the symbol table.
+    pub fn is_class(&self, name: &str) -> bool {
+        self.symbol_table.classes.contains_key(name)
+    }
+
+    /// Check if a name refers to a known enum in the symbol table.
+    pub fn is_enum(&self, name: &str) -> bool {
+        self.symbol_table.enums.contains_key(name)
     }
 }

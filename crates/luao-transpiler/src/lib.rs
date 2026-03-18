@@ -3,12 +3,26 @@ pub mod emitter;
 pub mod enum_emitter;
 pub mod expression_emitter;
 pub mod formatter;
+pub mod mangler;
 pub mod runtime;
 pub mod statement_emitter;
 
 pub use emitter::Emitter;
 
+#[derive(Debug, Clone, Default)]
+pub struct TranspileOptions {
+    pub minify: bool,
+    pub mangle: bool,
+}
+
 pub fn transpile(source: &str) -> Result<String, Vec<String>> {
+    transpile_with_options(source, &TranspileOptions::default())
+}
+
+pub fn transpile_with_options(
+    source: &str,
+    options: &TranspileOptions,
+) -> Result<String, Vec<String>> {
     let (ast, parse_errors) = luao_parser::parse(source);
     if !parse_errors.is_empty() {
         return Err(parse_errors.iter().map(|e| e.to_string()).collect());
@@ -25,8 +39,17 @@ pub fn transpile(source: &str) -> Result<String, Vec<String>> {
     if !errors.is_empty() {
         return Err(errors);
     }
-    let mut emitter = Emitter::new(symbol_table);
+    let mangler = if options.mangle {
+        Some(mangler::Mangler::new())
+    } else {
+        None
+    };
+    let mut emitter = Emitter::new(symbol_table, mangler);
     emitter.emit(&ast);
     let lua_source = emitter.output();
-    Ok(formatter::format_lua(&lua_source))
+    if options.minify {
+        Ok(formatter::minify_lua(&lua_source))
+    } else {
+        Ok(formatter::format_lua(&lua_source))
+    }
 }

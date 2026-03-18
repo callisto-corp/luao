@@ -74,6 +74,7 @@ impl Resolver {
                         access: f.access,
                         is_static: f.is_static,
                         is_readonly: f.is_readonly,
+                        is_extern: f.is_extern,
                     });
                 }
                 ClassMember::Method(m) => {
@@ -102,6 +103,7 @@ impl Resolver {
                         is_static: m.is_static,
                         is_abstract: m.is_abstract,
                         is_override: m.is_override,
+                        is_extern: m.is_extern,
                     });
                 }
                 ClassMember::Constructor(c) => {
@@ -125,6 +127,7 @@ impl Resolver {
                         is_static: false,
                         is_abstract: false,
                         is_override: false,
+                        is_extern: false,
                     });
                 }
                 ClassMember::Property(_) => {}
@@ -190,6 +193,7 @@ impl Resolver {
                     is_static: false,
                     is_abstract: true,
                     is_override: false,
+                    is_extern: false,
                 }
             })
             .collect();

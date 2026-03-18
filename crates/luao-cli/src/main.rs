@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use clap::{Parser, Subcommand};
+use luao_transpiler::TranspileOptions;
 
 #[derive(Parser)]
 #[command(name = "luao", version, about = "Luao language compiler and tools")]
@@ -11,8 +12,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Build { path: String },
-    Check { path: String },
+    Build {
+        path: String,
+        /// Minify the output (strip whitespace and blank lines)
+        #[arg(long)]
+        minify: bool,
+        /// Mangle property/method/variant names per type
+        #[arg(long)]
+        mangle: bool,
+    },
+    Check {
+        path: String,
+    },
     Lsp,
 }
 
@@ -21,23 +32,30 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Build { path } => build(&path),
+        Commands::Build {
+            path,
+            minify,
+            mangle,
+        } => {
+            let options = TranspileOptions { minify, mangle };
+            build(&path, &options);
+        }
         Commands::Check { path } => check(&path),
         Commands::Lsp => start_lsp().await,
     }
 }
 
-fn build(path: &str) {
+fn build(path: &str, options: &TranspileOptions) {
     let input = Path::new(path);
 
     if input.is_dir() {
-        build_directory(input);
+        build_directory(input, options);
     } else {
-        build_file(input);
+        build_file(input, options);
     }
 }
 
-fn build_directory(dir: &Path) {
+fn build_directory(dir: &Path, options: &TranspileOptions) {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -49,14 +67,14 @@ fn build_directory(dir: &Path) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            build_directory(&path);
+            build_directory(&path, options);
         } else if path.extension().map_or(false, |ext| ext == "luao") {
-            build_file(&path);
+            build_file(&path, options);
         }
     }
 }
 
-fn build_file(path: &Path) {
+fn build_file(path: &Path, options: &TranspileOptions) {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -65,7 +83,7 @@ fn build_file(path: &Path) {
         }
     };
 
-    match luao_transpiler::transpile(&source) {
+    match luao_transpiler::transpile_with_options(&source, options) {
         Ok(lua_code) => {
             let output_path = path.with_extension("lua");
             match std::fs::write(&output_path, &lua_code) {

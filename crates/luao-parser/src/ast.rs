@@ -62,6 +62,7 @@ pub struct FieldDecl {
     pub access: AccessModifier,
     pub is_static: bool,
     pub is_readonly: bool,
+    pub is_extern: bool,
     pub span: Span,
 }
 
@@ -76,6 +77,7 @@ pub struct MethodDecl {
     pub is_static: bool,
     pub is_abstract: bool,
     pub is_override: bool,
+    pub is_extern: bool,
     pub span: Span,
 }
 
@@ -94,6 +96,7 @@ pub struct PropertyDecl {
     pub getter: Option<Block>,
     pub setter: Option<(Identifier, Block)>,
     pub access: AccessModifier,
+    pub is_extern: bool,
     pub span: Span,
 }
 

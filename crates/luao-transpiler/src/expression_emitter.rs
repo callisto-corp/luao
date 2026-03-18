@@ -42,12 +42,14 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
         }
         Expression::MethodCall(mc) => {
             let object = emit_expression(emitter, &mc.object);
+            let method_name = maybe_mangle_access(emitter, &mc.object, &mc.method.name);
             let args = emit_args(emitter, &mc.args);
-            format!("{}:{}({})", object, mc.method.name, args)
+            format!("{}:{}({})", object, method_name, args)
         }
         Expression::FieldAccess(fa) => {
             let object = emit_expression(emitter, &fa.object);
-            format!("{}.{}", object, fa.field.name)
+            let field_name = maybe_mangle_access(emitter, &fa.object, &fa.field.name);
+            format!("{}.{}", object, field_name)
         }
         Expression::IndexAccess(ia) => {
             let object = emit_expression(emitter, &ia.object);
@@ -98,7 +100,16 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
                 .current_class_parent
                 .clone()
                 .unwrap_or_else(|| "super".to_string());
-            format!("{}.{}", parent, sa.method.name)
+            let method_name = sa.method.name.to_string();
+            // Mangle parent class method access (respecting extern)
+            if emitter.mangler.is_some()
+                && !is_extern_member(&emitter.symbol_table, &parent, &method_name)
+            {
+                let mangled = emitter.mangle_member(&parent, &method_name);
+                format!("{}.{}", parent, mangled)
+            } else {
+                format!("{}.{}", parent, method_name)
+            }
         }
         Expression::NewExpr(ne) => {
             let class_name = ne.class_name.name.name.to_string();
@@ -106,6 +117,63 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
             format!("{}._new({})", class_name, args)
         }
     }
+}
+
+/// Attempt to mangle a member name based on the object expression.
+/// Mangles when the object is `self` (current class), a known class name, or a known enum name.
+/// Respects the `extern` modifier — extern members are never mangled.
+fn maybe_mangle_access(emitter: &mut Emitter, object: &Expression, member_name: &str) -> String {
+    if emitter.mangler.is_none() {
+        return member_name.to_string();
+    }
+
+    if let Expression::Identifier(id) = object {
+        let name = id.name.as_str();
+
+        // self.field or self:method() → mangle using current class
+        if name == "self" {
+            if let Some(class_name) = emitter.current_class.clone() {
+                if is_extern_member(&emitter.symbol_table, &class_name, member_name) {
+                    return member_name.to_string();
+                }
+                return emitter.mangle_member(&class_name, member_name);
+            }
+        }
+
+        // ClassName.staticMember → mangle using that class
+        if emitter.is_class(name) {
+            if is_extern_member(&emitter.symbol_table, name, member_name) {
+                return member_name.to_string();
+            }
+            let type_name = name.to_string();
+            return emitter.mangle_member(&type_name, member_name);
+        }
+
+        // EnumName.Variant → mangle using that enum (enums don't have extern)
+        if emitter.is_enum(name) {
+            let type_name = name.to_string();
+            return emitter.mangle_member(&type_name, member_name);
+        }
+    }
+
+    member_name.to_string()
+}
+
+/// Check if a member of a class is marked as `extern` in the symbol table.
+fn is_extern_member(symbol_table: &luao_resolver::SymbolTable, class_name: &str, member_name: &str) -> bool {
+    if let Some(class) = symbol_table.classes.get(class_name) {
+        for field in &class.fields {
+            if field.name == member_name {
+                return field.is_extern;
+            }
+        }
+        for method in &class.methods {
+            if method.name == member_name {
+                return method.is_extern;
+            }
+        }
+    }
+    false
 }
 
 fn emit_args(emitter: &mut Emitter, args: &[Expression]) -> String {

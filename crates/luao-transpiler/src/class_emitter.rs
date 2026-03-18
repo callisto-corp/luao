@@ -33,7 +33,7 @@ pub fn emit_class(emitter: &mut Emitter, class: &ClassDecl) {
         match member {
             ClassMember::Field(field) => {
                 if field.is_static {
-                    let field_name = output_field_name(&field.name.name, field.access);
+                    let field_name = member_output_name(emitter, &class_name, &field.name.name, field.access, field.is_extern);
                     if let Some(ref val) = field.default_value {
                         let v = emit_expression(emitter, val);
                         emitter.writeln(&format!("{}.{} = {}", class_name, field_name, v));
@@ -101,11 +101,12 @@ fn emit_constructor(
 }
 
 fn emit_default_fields(emitter: &mut Emitter, class: &ClassDecl) {
+    let class_name = class.name.name.to_string();
     for member in &class.members {
         if let ClassMember::Field(field) = member {
             if !field.is_static {
                 if let Some(ref val) = field.default_value {
-                    let field_name = output_field_name(&field.name.name, field.access);
+                    let field_name = member_output_name(emitter, &class_name, &field.name.name, field.access, field.is_extern);
                     let v = emit_expression(emitter, val);
                     emitter.writeln(&format!("self.{} = {}", field_name, v));
                 }
@@ -159,10 +160,11 @@ fn emit_method(
     class_name: &str,
     parent_name: &Option<String>,
 ) {
-    let method_name = method.name.name.to_string();
+    let original_name = method.name.name.to_string();
+    let method_name = member_output_name(emitter, class_name, &original_name, method.access, method.is_extern);
     let params = emitter.emit_params(&method.params);
 
-    let is_operator = method_name.starts_with("__");
+    let is_operator = original_name.starts_with("__");
 
     let params = if is_operator && !method.is_static {
         if params.is_empty() {
@@ -189,7 +191,7 @@ fn emit_method(
         emitter.indent();
         emitter.writeln(&format!(
             "error(\"Abstract method '{}' must be implemented\")",
-            method_name
+            original_name
         ));
         emitter.dedent();
         emitter.writeln("end");
@@ -241,7 +243,7 @@ fn emit_property_interceptors(emitter: &mut Emitter, class: &ClassDecl, class_na
         for member in &class.members {
             if let ClassMember::Property(prop) = member {
                 if let Some(ref getter_body) = prop.getter {
-                    let prop_name = &prop.name.name;
+                    let prop_name = member_output_name(emitter, class_name, &prop.name.name, prop.access, prop.is_extern);
                     emitter.writeln(&format!(
                         "{}.__getters[\"{}\"] = function(self)",
                         class_name, prop_name
@@ -259,7 +261,7 @@ fn emit_property_interceptors(emitter: &mut Emitter, class: &ClassDecl, class_na
         for member in &class.members {
             if let ClassMember::Property(prop) = member {
                 if let Some((ref param, ref setter_body)) = prop.setter {
-                    let prop_name = &prop.name.name;
+                    let prop_name = member_output_name(emitter, class_name, &prop.name.name, prop.access, prop.is_extern);
                     emitter.writeln(&format!(
                         "{}.__setters[\"{}\"] = function(self, {})",
                         class_name, prop_name, param.name
@@ -312,6 +314,16 @@ fn emit_property_interceptors(emitter: &mut Emitter, class: &ClassDecl, class_na
             emitter.writeln("end");
             emitter.newline();
         }
+    }
+}
+
+/// Get the output name for a class member, applying mangling or the `_` prefix for private/protected.
+/// If `is_extern` is true, mangling is skipped for this member.
+fn member_output_name(emitter: &mut Emitter, class_name: &str, name: &str, access: AccessModifier, is_extern: bool) -> String {
+    if emitter.mangler.is_some() && !is_extern {
+        emitter.mangle_member(class_name, name)
+    } else {
+        output_field_name(name, access)
     }
 }
 

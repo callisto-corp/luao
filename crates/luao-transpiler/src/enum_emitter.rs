@@ -12,7 +12,8 @@ pub fn emit_enum(emitter: &mut Emitter, enum_decl: &EnumDecl) {
     let mut next_value: i64 = 1;
 
     for variant in &enum_decl.variants {
-        let variant_name = variant.name.name.to_string();
+        let original_name = variant.name.name.to_string();
+        let output_name = emitter.mangle_member(&name, &original_name);
         let value = if let Some(expr) = &variant.value {
             let val_str = emit_expression(emitter, expr);
             if let luao_parser::Expression::Number(n, _) = expr {
@@ -26,8 +27,8 @@ pub fn emit_enum(emitter: &mut Emitter, enum_decl: &EnumDecl) {
             next_value += 1;
             v.to_string()
         };
-        entries.push(format!("{} = {}", variant_name, value));
-        reverse_entries.push(format!("[{}] = \"{}\"", value, variant_name));
+        entries.push(format!("{} = {}", output_name, value));
+        reverse_entries.push(format!("[{}] = \"{}\"", value, output_name));
     }
 
     emitter.writeln(&format!(
