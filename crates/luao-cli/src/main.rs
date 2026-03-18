@@ -14,26 +14,18 @@ struct Cli {
 enum Commands {
     Build {
         path: String,
+        /// Output file or directory path (default: <name>.out.lua)
+        #[arg(short, long)]
+        output: Option<String>,
         /// Minify the output (strip whitespace and blank lines)
         #[arg(long)]
         minify: bool,
         /// Mangle property/method/variant names per type
         #[arg(long)]
         mangle: bool,
-    },
-    /// Bundle a Luao project into a single file, resolving imports
-    Bundle {
-        /// Entry point file
-        path: String,
-        /// Output file path
-        #[arg(short, long)]
-        output: String,
-        /// Minify the output
+        /// Skip bundling (don't resolve imports)
         #[arg(long)]
-        minify: bool,
-        /// Mangle property names
-        #[arg(long)]
-        mangle: bool,
+        no_bundle: bool,
     },
     Check {
         path: String,
@@ -48,37 +40,45 @@ async fn main() {
     match cli.command {
         Commands::Build {
             path,
-            minify,
-            mangle,
-        } => {
-            let options = TranspileOptions { minify, mangle };
-            build(&path, &options);
-        }
-        Commands::Bundle {
-            path,
             output,
             minify,
             mangle,
+            no_bundle,
         } => {
             let options = TranspileOptions { minify, mangle };
-            bundle_cmd(&path, &output, &options);
+            build(&path, output.as_deref(), no_bundle, &options);
         }
         Commands::Check { path } => check(&path),
         Commands::Lsp => start_lsp().await,
     }
 }
 
-fn build(path: &str, options: &TranspileOptions) {
+fn build(path: &str, output: Option<&str>, no_bundle: bool, options: &TranspileOptions) {
     let input = Path::new(path);
 
     if input.is_dir() {
-        build_directory(input, options);
+        let output_dir = output.map(Path::new);
+        build_directory(input, output_dir, no_bundle, options);
     } else {
-        build_file(input, options);
+        let output_path = match output {
+            Some(o) => Path::new(o).to_path_buf(),
+            None => default_build_output(input),
+        };
+        if no_bundle {
+            build_file(input, &output_path, options);
+        } else {
+            bundle_file(input, &output_path, options);
+        }
     }
 }
 
-fn build_directory(dir: &Path, options: &TranspileOptions) {
+fn default_build_output(path: &Path) -> std::path::PathBuf {
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    parent.join(format!("{}.out.lua", stem))
+}
+
+fn build_directory(dir: &Path, output_dir: Option<&Path>, no_bundle: bool, options: &TranspileOptions) {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -90,14 +90,26 @@ fn build_directory(dir: &Path, options: &TranspileOptions) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            build_directory(&path, options);
+            let sub_output = output_dir.map(|o| o.join(path.file_name().unwrap()));
+            build_directory(&path, sub_output.as_deref(), no_bundle, options);
         } else if path.extension().map_or(false, |ext| ext == "luao") {
-            build_file(&path, options);
+            let output_path = match output_dir {
+                Some(o) => {
+                    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+                    o.join(format!("{}.lua", stem))
+                }
+                None => default_build_output(&path),
+            };
+            if no_bundle {
+                build_file(&path, &output_path, options);
+            } else {
+                bundle_file(&path, &output_path, options);
+            }
         }
     }
 }
 
-fn build_file(path: &Path, options: &TranspileOptions) {
+fn build_file(path: &Path, output_path: &Path, options: &TranspileOptions) {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -108,8 +120,12 @@ fn build_file(path: &Path, options: &TranspileOptions) {
 
     match luao_transpiler::transpile_with_options(&source, options) {
         Ok(lua_code) => {
-            let output_path = path.with_extension("lua");
-            match std::fs::write(&output_path, &lua_code) {
+            if let Some(parent) = output_path.parent() {
+                if !parent.exists() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+            }
+            match std::fs::write(output_path, &lua_code) {
                 Ok(_) => println!("Built: {} -> {}", path.display(), output_path.display()),
                 Err(e) => eprintln!("Failed to write {}: {}", output_path.display(), e),
             }
@@ -123,23 +139,24 @@ fn build_file(path: &Path, options: &TranspileOptions) {
     }
 }
 
-fn bundle_cmd(path: &str, output: &str, options: &TranspileOptions) {
-    let input = Path::new(path);
-
-    match luao_transpiler::bundler::bundle(input, options) {
+fn bundle_file(path: &Path, output_path: &Path, options: &TranspileOptions) {
+    match luao_transpiler::bundler::bundle(path, options) {
         Ok(code) => {
-            let output_path = Path::new(output);
+            if let Some(parent) = output_path.parent() {
+                if !parent.exists() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+            }
             match std::fs::write(output_path, &code) {
-                Ok(_) => println!("Bundled: {} -> {}", input.display(), output_path.display()),
+                Ok(_) => println!("Built: {} -> {}", path.display(), output_path.display()),
                 Err(e) => eprintln!("Failed to write {}: {}", output_path.display(), e),
             }
         }
         Err(errors) => {
-            eprintln!("Bundle errors:");
+            eprintln!("Errors in {}:", path.display());
             for error in &errors {
                 eprintln!("  {}", error);
             }
-            std::process::exit(1);
         }
     }
 }
