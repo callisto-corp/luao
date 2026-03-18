@@ -1679,6 +1679,32 @@ impl Parser {
         let start = self.current_span();
 
         let mut ty = match self.current().kind {
+            TokenKind::LeftBrace => {
+                self.advance();
+                if self.check(TokenKind::LeftBracket) {
+                    // {[K]: V} dictionary type
+                    self.advance();
+                    let key_type = self.parse_type_annotation()?;
+                    self.expect(TokenKind::RightBracket)?;
+                    self.expect(TokenKind::Colon)?;
+                    let val_type = self.parse_type_annotation()?;
+                    self.expect(TokenKind::RightBrace)?;
+                    let end = self.previous_span();
+                    TypeAnnotation {
+                        kind: TypeKind::Table(Box::new(key_type), Box::new(val_type)),
+                        span: start.merge(end),
+                    }
+                } else {
+                    // {T} array-like table type
+                    let inner = self.parse_type_annotation()?;
+                    self.expect(TokenKind::RightBrace)?;
+                    let end = self.previous_span();
+                    TypeAnnotation {
+                        kind: TypeKind::Array(Box::new(inner)),
+                        span: start.merge(end),
+                    }
+                }
+            }
             TokenKind::Nil => {
                 self.advance();
                 TypeAnnotation {
@@ -1749,17 +1775,6 @@ impl Parser {
                 ));
             }
         };
-
-        if self.check(TokenKind::LeftBracket) && self.peek_ahead(1).kind == TokenKind::RightBracket
-        {
-            self.advance();
-            self.advance();
-            let end = self.previous_span();
-            ty = TypeAnnotation {
-                kind: TypeKind::Array(Box::new(ty)),
-                span: start.merge(end),
-            };
-        }
 
         if self.check(TokenKind::QuestionMark) {
             self.advance();
@@ -2071,7 +2086,7 @@ mod tests {
     fn test_generic_class() {
         let file = parse_ok(
             "class Stack<T>\n\
-                 private items: T[]\n\
+                 private items: {T}\n\
              end",
         );
         if let Statement::ClassDecl(class) = &file.statements[0] {

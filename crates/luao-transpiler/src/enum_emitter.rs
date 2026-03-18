@@ -37,9 +37,10 @@ pub fn emit_enum(emitter: &mut Emitter, enum_decl: &EnumDecl) {
         local_prefix, name,
         entries.join(", ")
     ));
+    let values_name = emitter.mangle_shared("_values");
     emitter.writeln(&format!(
-        "{}._values = {{ {} }}",
-        name,
+        "{}.{} = {{ {} }}",
+        name, values_name,
         reverse_entries.join(", ")
     ));
     emitter.writeln(&format!("__luao_enum_freeze({})", name));

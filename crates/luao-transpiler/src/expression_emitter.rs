@@ -125,8 +125,9 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
         }
         Expression::NewExpr(ne) => {
             let class_name = emitter.rename(&ne.class_name.name.name);
+            let new_name = emitter.mangle_shared("_new");
             let args = emit_args(emitter, &ne.args);
-            format!("{}._new({})", class_name, args)
+            format!("{}.{}({})", class_name, new_name, args)
         }
         Expression::CastExpr(cast) => {
             // Cast is erased at compile time — just emit the inner expression

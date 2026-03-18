@@ -194,6 +194,7 @@ pub enum TypeKind {
     Named(Identifier, Vec<TypeAnnotation>),
     Function(Vec<TypeAnnotation>, Box<TypeAnnotation>),
     Array(Box<TypeAnnotation>),
+    Table(Box<TypeAnnotation>, Box<TypeAnnotation>),
     Tuple(Vec<TypeAnnotation>),
     Union(Vec<TypeAnnotation>),
     Optional(Box<TypeAnnotation>),

@@ -70,8 +70,9 @@ fn emit_constructor(
     parent_name: &Option<String>,
 ) {
     let params = emitter.emit_params(&ctor.params);
+    let new_name = emitter.mangle_shared("_new");
 
-    emitter.writeln(&format!("function {}._new({})", class_name, params));
+    emitter.writeln(&format!("function {}.{}({})", class_name, new_name, params));
     emitter.indent();
 
     if class.is_abstract {
@@ -86,7 +87,8 @@ fn emit_constructor(
 
     if !has_super_call {
         if let Some(parent) = parent_name {
-            emitter.writeln(&format!("local self = {}._new()", parent));
+            let parent_new = emitter.mangle_shared("_new");
+            emitter.writeln(&format!("local self = {}.{}()", parent, parent_new));
             emitter.writeln(&format!("setmetatable(self, {})", class_name));
         } else {
             emitter.writeln(&format!("local self = setmetatable({{}}, {})", class_name));
@@ -111,7 +113,8 @@ fn emit_default_constructor(
     class_name: &str,
     parent_name: &Option<String>,
 ) {
-    emitter.writeln(&format!("function {}._new()", class_name));
+    let new_name = emitter.mangle_shared("_new");
+    emitter.writeln(&format!("function {}.{}()", class_name, new_name));
     emitter.indent();
 
     if class.is_abstract {
@@ -122,7 +125,8 @@ fn emit_default_constructor(
     }
 
     if let Some(parent) = parent_name {
-        emitter.writeln(&format!("local self = {}._new()", parent));
+        let parent_new = emitter.mangle_shared("_new");
+        emitter.writeln(&format!("local self = {}.{}()", parent, parent_new));
         emitter.writeln(&format!("setmetatable(self, {})", class_name));
     } else {
         emitter.writeln(&format!("local self = setmetatable({{}}, {})", class_name));
@@ -179,7 +183,8 @@ fn emit_constructor_statement(
                             .map(|a| emit_expression(emitter, a))
                             .collect::<Vec<_>>()
                             .join(", ");
-                        emitter.writeln(&format!("local self = {}._new({})", parent, args));
+                        let parent_new = emitter.mangle_shared("_new");
+                        emitter.writeln(&format!("local self = {}.{}({})", parent, parent_new, args));
                         emitter.writeln(&format!("setmetatable(self, {})", class_name));
                         return;
                     }

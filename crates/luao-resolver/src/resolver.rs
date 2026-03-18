@@ -276,6 +276,11 @@ impl Resolver {
                 let inner_type = self.resolve_type(inner);
                 LuaoType::Array(Box::new(inner_type))
             }
+            TypeKind::Table(key, val) => {
+                let key_type = self.resolve_type(key);
+                let val_type = self.resolve_type(val);
+                LuaoType::Table(Box::new(key_type), Box::new(val_type))
+            }
             TypeKind::Union(types) => {
                 let union_types = types.iter().map(|t| self.resolve_type(t)).collect();
                 LuaoType::Union(union_types)

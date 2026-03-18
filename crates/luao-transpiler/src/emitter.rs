@@ -175,6 +175,17 @@ impl Emitter {
         self.exported_names.contains(name)
     }
 
+    /// Get the mangled name for a shared member (like _new, _values).
+    /// Returns the original name if mangling is disabled.
+    pub fn mangle_shared(&mut self, name: &str) -> String {
+        if let Some(ref mut mangler) = self.mangler {
+            // Use an empty type name — shared names are type-independent
+            mangler.mangle("", name)
+        } else {
+            name.to_string()
+        }
+    }
+
     /// Apply rename map for references (checks import aliases first, then local renames).
     pub fn rename(&self, name: &str) -> String {
         if let Some(alias_target) = self.import_aliases.get(name) {

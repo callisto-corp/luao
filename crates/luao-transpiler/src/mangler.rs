@@ -9,8 +9,21 @@ const LUA_KEYWORDS: &[&str] = &[
     "repeat", "return", "then", "true", "type", "until", "while",
 ];
 
+/// Names that should be mangled consistently across ALL types (e.g. _new, _values).
+const SHARED_NAMES: &[&str] = &["_new", "_values"];
+
+/// Lua metamethods that CANNOT be mangled — the Lua runtime looks them up by exact name.
+const LUA_METAMETHODS: &[&str] = &[
+    "__index", "__newindex", "__call", "__concat", "__unm", "__add", "__sub",
+    "__mul", "__div", "__idiv", "__mod", "__pow", "__tostring", "__metatable",
+    "__eq", "__lt", "__le", "__gc", "__close", "__len", "__pairs", "__ipairs",
+    "__iter", "__mode", "__name", "__type",
+];
+
 pub struct Mangler {
     type_maps: HashMap<String, TypeMangler>,
+    /// Shared name mappings — same mangled name used across all types.
+    shared_map: TypeMangler,
 }
 
 struct TypeMangler {
@@ -22,23 +35,44 @@ impl Mangler {
     pub fn new() -> Self {
         Self {
             type_maps: HashMap::new(),
+            shared_map: TypeMangler::new(),
         }
     }
 
     pub fn mangle(&mut self, type_name: &str, member_name: &str) -> String {
-        if member_name.starts_with("__") || member_name == "_new" || member_name == "_values" {
+        // Lua metamethods cannot be mangled — the runtime requires exact names
+        if LUA_METAMETHODS.contains(&member_name) {
             return member_name.to_string();
+        }
+        // Shared names get one consistent mangled name across all types
+        if SHARED_NAMES.contains(&member_name) {
+            let name = self.shared_map.get_or_create(member_name);
+            // Reserve this name in all existing per-type manglers to prevent collisions
+            for tm in self.type_maps.values_mut() {
+                tm.reserve(&name);
+            }
+            return name;
         }
         let type_mangler = self
             .type_maps
             .entry(type_name.to_string())
-            .or_insert_with(TypeMangler::new);
+            .or_insert_with(|| {
+                let mut tm = TypeMangler::new();
+                // Reserve all already-assigned shared names
+                for reserved in self.shared_map.name_map.values() {
+                    tm.reserve(reserved);
+                }
+                tm
+            });
         type_mangler.get_or_create(member_name)
     }
 
     pub fn lookup(&self, type_name: &str, member_name: &str) -> Option<String> {
-        if member_name.starts_with("__") || member_name == "_new" || member_name == "_values" {
+        if LUA_METAMETHODS.contains(&member_name) {
             return Some(member_name.to_string());
+        }
+        if SHARED_NAMES.contains(&member_name) {
+            return self.shared_map.name_map.get(member_name).cloned();
         }
         self.type_maps
             .get(type_name)
@@ -51,6 +85,19 @@ impl TypeMangler {
         Self {
             name_map: HashMap::new(),
             next_index: 0,
+        }
+    }
+
+    /// Reserve a generated name so it won't be assigned to any future member.
+    fn reserve(&mut self, reserved_name: &str) {
+        // Skip indices that would generate this name
+        loop {
+            let candidate = index_to_name(self.next_index);
+            if candidate == reserved_name {
+                self.next_index += 1;
+            } else {
+                break;
+            }
         }
     }
 
@@ -175,7 +222,17 @@ mod tests {
         let mut mangler = Mangler::new();
         assert_eq!(mangler.mangle("Test", "__index"), "__index");
         assert_eq!(mangler.mangle("Test", "__tostring"), "__tostring");
-        assert_eq!(mangler.mangle("Test", "_new"), "_new");
-        assert_eq!(mangler.mangle("Test", "_values"), "_values");
+    }
+
+    #[test]
+    fn test_shared_names_consistent() {
+        let mut mangler = Mangler::new();
+        let new_a = mangler.mangle("ClassA", "_new");
+        let new_b = mangler.mangle("ClassB", "_new");
+        assert_eq!(new_a, new_b, "_new should have same mangled name across types");
+
+        let vals_a = mangler.mangle("EnumA", "_values");
+        let vals_b = mangler.mangle("EnumB", "_values");
+        assert_eq!(vals_a, vals_b, "_values should have same mangled name across types");
     }
 }
