@@ -4,9 +4,9 @@ const FIRST_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXY
 const REST_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789";
 
 const LUA_KEYWORDS: &[&str] = &[
-    "and", "break", "do", "else", "elseif", "end", "false", "for",
-    "function", "goto", "if", "in", "local", "nil", "not", "or",
-    "repeat", "return", "then", "true", "until", "while",
+    "and", "break", "continue", "do", "else", "elseif", "end", "false",
+    "for", "function", "if", "in", "local", "nil", "not", "or",
+    "repeat", "return", "then", "true", "type", "until", "while",
 ];
 
 pub struct Mangler {

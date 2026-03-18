@@ -116,6 +116,10 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
             let args = emit_args(emitter, &ne.args);
             format!("{}._new({})", class_name, args)
         }
+        Expression::CastExpr(cast) => {
+            // Cast is erased at compile time — just emit the inner expression
+            emit_expression(emitter, &cast.expr)
+        }
     }
 }
 

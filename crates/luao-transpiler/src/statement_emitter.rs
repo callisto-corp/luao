@@ -125,11 +125,11 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
         Statement::Break(_) => {
             emitter.writeln("break");
         }
-        Statement::Goto(label) => {
-            emitter.writeln(&format!("goto {}", label.name));
+        Statement::Continue(_) => {
+            emitter.writeln("continue");
         }
-        Statement::Label(label) => {
-            emitter.writeln(&format!("::{}::", label.name));
+        Statement::TypeAlias(_) => {
+            // Type aliases are erased at compile time
         }
         Statement::ExpressionStatement(expr) => {
             let e = emit_expression(emitter, expr);

@@ -114,17 +114,12 @@ impl Parser {
                 self.advance();
                 Ok(Statement::Break(span))
             }
-            TokenKind::Goto => {
+            TokenKind::Continue => {
+                let span = self.current_span();
                 self.advance();
-                let name = self.expect_identifier()?;
-                Ok(Statement::Goto(name))
+                Ok(Statement::Continue(span))
             }
-            TokenKind::ColonColon => {
-                self.advance();
-                let name = self.expect_identifier()?;
-                self.expect(TokenKind::ColonColon)?;
-                Ok(Statement::Label(name))
-            }
+            TokenKind::Type => self.parse_type_alias(),
             _ => self.parse_expr_or_assignment(),
         }
     }
@@ -459,6 +454,29 @@ impl Parser {
             setter: Some((param, body)),
             access,
             is_extern,
+            span: start.merge(end),
+        }))
+    }
+
+    fn parse_type_alias(&mut self) -> ParseResult<Statement> {
+        let start = self.current_span();
+        self.expect(TokenKind::Type)?;
+        let name = self.expect_identifier()?;
+
+        let type_params = if self.check(TokenKind::LessThan) {
+            self.parse_type_params()?
+        } else {
+            Vec::new()
+        };
+
+        self.expect(TokenKind::Assign)?;
+        let value = self.parse_type_annotation()?;
+        let end = self.previous_span();
+
+        Ok(Statement::TypeAlias(TypeAliasDecl {
+            name,
+            type_params,
+            value,
             span: start.merge(end),
         }))
     }
@@ -963,6 +981,17 @@ impl Parser {
             left = Expression::Instanceof(Box::new(InstanceofExpr {
                 object: left,
                 class_name,
+                span,
+            }));
+        }
+
+        if self.check(TokenKind::As) {
+            self.advance();
+            let target_type = self.parse_type_annotation()?;
+            let span = left.span().merge(target_type.span);
+            left = Expression::CastExpr(Box::new(CastExpr {
+                expr: left,
+                target_type,
                 span,
             }));
         }
@@ -1560,21 +1589,29 @@ impl Parser {
             }
             TokenKind::LeftParen => {
                 self.advance();
-                let mut param_types = Vec::new();
+                let mut types = Vec::new();
                 if !self.check(TokenKind::RightParen) {
-                    param_types.push(self.parse_type_annotation()?);
+                    types.push(self.parse_type_annotation()?);
                     while self.check(TokenKind::Comma) {
                         self.advance();
-                        param_types.push(self.parse_type_annotation()?);
+                        types.push(self.parse_type_annotation()?);
                     }
                 }
                 self.expect(TokenKind::RightParen)?;
-                self.expect(TokenKind::Arrow)?;
-                let return_type = self.parse_type_annotation()?;
-                let end = self.previous_span();
-                TypeAnnotation {
-                    kind: TypeKind::Function(param_types, Box::new(return_type)),
-                    span: start.merge(end),
+                if self.check(TokenKind::Arrow) {
+                    self.advance();
+                    let return_type = self.parse_type_annotation()?;
+                    let end = self.previous_span();
+                    TypeAnnotation {
+                        kind: TypeKind::Function(types, Box::new(return_type)),
+                        span: start.merge(end),
+                    }
+                } else {
+                    let end = self.previous_span();
+                    TypeAnnotation {
+                        kind: TypeKind::Tuple(types),
+                        span: start.merge(end),
+                    }
                 }
             }
             TokenKind::Identifier => {
@@ -1621,6 +1658,15 @@ impl Parser {
             let end = self.previous_span();
             ty = TypeAnnotation {
                 kind: TypeKind::Array(Box::new(ty)),
+                span: start.merge(end),
+            };
+        }
+
+        if self.check(TokenKind::QuestionMark) {
+            self.advance();
+            let end = self.previous_span();
+            ty = TypeAnnotation {
+                kind: TypeKind::Optional(Box::new(ty)),
                 span: start.merge(end),
             };
         }

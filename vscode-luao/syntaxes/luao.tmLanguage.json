@@ -12,6 +12,7 @@
     { "include": "#class-definition" },
     { "include": "#interface-definition" },
     { "include": "#enum-definition" },
+    { "include": "#type-alias-definition" },
     { "include": "#function-definition" },
     { "include": "#luao-keywords" },
     { "include": "#lua-keywords" },
@@ -106,6 +107,13 @@
         "2": { "name": "entity.name.type.enum.luao" }
       }
     },
+    "type-alias-definition": {
+      "match": "\\b(type)\\s+([a-zA-Z_]\\w*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.type.luao" },
+        "2": { "name": "entity.name.type.alias.luao" }
+      }
+    },
     "function-definition": {
       "match": "\\b(function)\\s+([a-zA-Z_]\\w*(?:[.:][a-zA-Z_]\\w*)*)",
       "captures": {
@@ -114,14 +122,14 @@
       }
     },
     "luao-keywords": {
-      "match": "\\b(class|extends|implements|interface|abstract|static|public|private|protected|readonly|super|new|enum|sealed|get|set|override|instanceof|extern)\\b",
+      "match": "\\b(class|extends|implements|interface|abstract|static|public|private|protected|readonly|super|new|enum|sealed|get|set|override|instanceof|extern|as|type|continue)\\b",
       "name": "keyword.other.luao"
     },
     "lua-keywords": {
       "patterns": [
         {
           "name": "keyword.control.luao",
-          "match": "\\b(and|break|do|else|elseif|end|for|goto|if|in|not|or|repeat|return|then|until|while)\\b"
+          "match": "\\b(and|break|do|else|elseif|end|for|if|in|not|or|repeat|return|then|until|while)\\b"
         },
         {
           "name": "keyword.declaration.luao",
@@ -150,7 +158,7 @@
       ]
     },
     "type-annotation": {
-      "match": ":\\s*([a-zA-Z_]\\w*(?:\\[\\])?)",
+      "match": ":\\s*([a-zA-Z_]\\w*(?:<[^>]+>)?(?:\\[\\])?\\??(?:\\s*\\|\\s*[a-zA-Z_]\\w*(?:<[^>]+>)?(?:\\[\\])?\\??)*)",
       "captures": {
         "1": { "name": "support.type.luao" }
       }

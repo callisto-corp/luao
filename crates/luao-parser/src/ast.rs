@@ -18,6 +18,7 @@ pub enum Statement {
     ClassDecl(ClassDecl),
     InterfaceDecl(InterfaceDecl),
     EnumDecl(EnumDecl),
+    TypeAlias(TypeAliasDecl),
     LocalAssignment(LocalAssignment),
     Assignment(Assignment),
     FunctionDecl(FunctionDecl),
@@ -29,9 +30,16 @@ pub enum Statement {
     DoBlock(Block),
     ReturnStatement(ReturnStatement),
     Break(Span),
-    Goto(Identifier),
-    Label(Identifier),
+    Continue(Span),
     ExpressionStatement(Expression),
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeAliasDecl {
+    pub name: Identifier,
+    pub type_params: Vec<TypeParam>,
+    pub value: TypeAnnotation,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +178,7 @@ pub enum TypeKind {
     Named(Identifier, Vec<TypeAnnotation>),
     Function(Vec<TypeAnnotation>, Box<TypeAnnotation>),
     Array(Box<TypeAnnotation>),
+    Tuple(Vec<TypeAnnotation>),
     Union(Vec<TypeAnnotation>),
     Optional(Box<TypeAnnotation>),
     Nil,
@@ -290,6 +299,7 @@ pub enum Expression {
     Instanceof(Box<InstanceofExpr>),
     SuperAccess(Box<SuperAccess>),
     NewExpr(Box<NewExpr>),
+    CastExpr(Box<CastExpr>),
 }
 
 impl Expression {
@@ -313,6 +323,7 @@ impl Expression {
             Expression::Instanceof(i) => i.span,
             Expression::SuperAccess(s) => s.span,
             Expression::NewExpr(n) => n.span,
+            Expression::CastExpr(c) => c.span,
         }
     }
 }
@@ -432,5 +443,12 @@ pub struct SuperAccess {
 pub struct NewExpr {
     pub class_name: TypeReference,
     pub args: Vec<Expression>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct CastExpr {
+    pub expr: Expression,
+    pub target_type: TypeAnnotation,
     pub span: Span,
 }

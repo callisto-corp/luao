@@ -283,6 +283,11 @@ impl Resolver {
                 let inner_type = self.resolve_type(inner);
                 LuaoType::Optional(Box::new(inner_type))
             }
+            TypeKind::Tuple(types) => {
+                // Tuples resolve as a table of positional types; for now treat as Unknown
+                let _ = types;
+                LuaoType::Unknown
+            }
         }
     }
 }

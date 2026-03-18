@@ -23,6 +23,7 @@ impl<'a> Checker<'a> {
         diagnostics.extend(rules::check_access_modifiers(file, self.symbol_table));
         diagnostics.extend(rules::check_override_validity(file, self.symbol_table));
         diagnostics.extend(rules::check_super_usage(file, self.symbol_table));
+        diagnostics.extend(rules::check_union_member_access(file, self.symbol_table));
         diagnostics
     }
 }

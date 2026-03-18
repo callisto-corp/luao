@@ -324,14 +324,8 @@ impl<'a> Lexer<'a> {
                     TokenKind::Dot
                 }
             }
-            ':' => {
-                if self.cursor.peek() == Some(':') {
-                    self.cursor.advance();
-                    TokenKind::ColonColon
-                } else {
-                    TokenKind::Colon
-                }
-            }
+            ':' => TokenKind::Colon,
+            '?' => TokenKind::QuestionMark,
             '-' => {
                 if self.cursor.peek() == Some('>') {
                     self.cursor.advance();

@@ -12,6 +12,7 @@ pub struct Token {
 pub enum TokenKind {
     And,
     Break,
+    Continue,
     Do,
     Else,
     ElseIf,
@@ -19,7 +20,6 @@ pub enum TokenKind {
     False,
     For,
     Function,
-    Goto,
     If,
     In,
     Local,
@@ -52,6 +52,8 @@ pub enum TokenKind {
     Override,
     Instanceof,
     Extern,
+    As,
+    Type,
 
     Identifier,
     Number,
@@ -68,9 +70,9 @@ pub enum TokenKind {
     DotDot,
     DotDotDot,
     Colon,
-    ColonColon,
     Semicolon,
     Comma,
+    QuestionMark,
 
     Plus,
     Minus,
@@ -108,6 +110,7 @@ impl TokenKind {
         match s {
             "and" => Some(TokenKind::And),
             "break" => Some(TokenKind::Break),
+            "continue" => Some(TokenKind::Continue),
             "do" => Some(TokenKind::Do),
             "else" => Some(TokenKind::Else),
             "elseif" => Some(TokenKind::ElseIf),
@@ -115,7 +118,6 @@ impl TokenKind {
             "false" => Some(TokenKind::False),
             "for" => Some(TokenKind::For),
             "function" => Some(TokenKind::Function),
-            "goto" => Some(TokenKind::Goto),
             "if" => Some(TokenKind::If),
             "in" => Some(TokenKind::In),
             "local" => Some(TokenKind::Local),
@@ -147,6 +149,8 @@ impl TokenKind {
             "override" => Some(TokenKind::Override),
             "instanceof" => Some(TokenKind::Instanceof),
             "extern" => Some(TokenKind::Extern),
+            "as" => Some(TokenKind::As),
+            "type" => Some(TokenKind::Type),
             _ => None,
         }
     }
@@ -156,6 +160,7 @@ impl TokenKind {
             self,
             TokenKind::And
                 | TokenKind::Break
+                | TokenKind::Continue
                 | TokenKind::Do
                 | TokenKind::Else
                 | TokenKind::ElseIf
@@ -163,7 +168,6 @@ impl TokenKind {
                 | TokenKind::False
                 | TokenKind::For
                 | TokenKind::Function
-                | TokenKind::Goto
                 | TokenKind::If
                 | TokenKind::In
                 | TokenKind::Local
@@ -195,6 +199,8 @@ impl TokenKind {
                 | TokenKind::Override
                 | TokenKind::Instanceof
                 | TokenKind::Extern
+                | TokenKind::As
+                | TokenKind::Type
         )
     }
 }
@@ -204,6 +210,7 @@ impl std::fmt::Display for TokenKind {
         match self {
             TokenKind::And => write!(f, "and"),
             TokenKind::Break => write!(f, "break"),
+            TokenKind::Continue => write!(f, "continue"),
             TokenKind::Do => write!(f, "do"),
             TokenKind::Else => write!(f, "else"),
             TokenKind::ElseIf => write!(f, "elseif"),
@@ -211,7 +218,6 @@ impl std::fmt::Display for TokenKind {
             TokenKind::False => write!(f, "false"),
             TokenKind::For => write!(f, "for"),
             TokenKind::Function => write!(f, "function"),
-            TokenKind::Goto => write!(f, "goto"),
             TokenKind::If => write!(f, "if"),
             TokenKind::In => write!(f, "in"),
             TokenKind::Local => write!(f, "local"),
@@ -243,6 +249,8 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Override => write!(f, "override"),
             TokenKind::Instanceof => write!(f, "instanceof"),
             TokenKind::Extern => write!(f, "extern"),
+            TokenKind::As => write!(f, "as"),
+            TokenKind::Type => write!(f, "type"),
             TokenKind::Identifier => write!(f, "identifier"),
             TokenKind::Number => write!(f, "number"),
             TokenKind::StringLiteral => write!(f, "string"),
@@ -256,9 +264,9 @@ impl std::fmt::Display for TokenKind {
             TokenKind::DotDot => write!(f, ".."),
             TokenKind::DotDotDot => write!(f, "..."),
             TokenKind::Colon => write!(f, ":"),
-            TokenKind::ColonColon => write!(f, "::"),
             TokenKind::Semicolon => write!(f, ";"),
             TokenKind::Comma => write!(f, ","),
+            TokenKind::QuestionMark => write!(f, "?"),
             TokenKind::Plus => write!(f, "+"),
             TokenKind::Minus => write!(f, "-"),
             TokenKind::Star => write!(f, "*"),

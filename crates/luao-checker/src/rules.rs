@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+
 use luao_parser::{
-    AccessModifier, Block, ClassMember, Expression, SourceFile, Statement,
+    AccessModifier, Block, ClassMember, Expression, SourceFile, Statement, TypeAnnotation, TypeKind,
 };
 use luao_resolver::SymbolTable;
 
@@ -532,5 +534,242 @@ fn check_super_in_expr(
             check_super_in_expr(&fa.object, has_parent, class_name, diagnostics);
         }
         _ => {}
+    }
+}
+
+// --- E013: Union type member access ---
+
+pub fn check_union_member_access(
+    file: &SourceFile,
+    _symbols: &SymbolTable,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut env = UnionEnv::new();
+    for stmt in &file.statements {
+        check_union_in_statement(stmt, &mut env, &mut diagnostics);
+    }
+    diagnostics
+}
+
+/// Tracks which variable names have union type annotations.
+struct UnionEnv {
+    /// variable name -> true if its declared type is a union
+    union_vars: HashMap<String, bool>,
+}
+
+impl UnionEnv {
+    fn new() -> Self {
+        Self {
+            union_vars: HashMap::new(),
+        }
+    }
+
+    fn register(&mut self, name: &str, ty: Option<&TypeAnnotation>) {
+        let is_union = ty.map_or(false, |t| is_union_type(&t.kind));
+        self.union_vars.insert(name.to_string(), is_union);
+    }
+
+    fn is_union(&self, name: &str) -> bool {
+        self.union_vars.get(name).copied().unwrap_or(false)
+    }
+}
+
+fn is_union_type(kind: &TypeKind) -> bool {
+    matches!(kind, TypeKind::Union(_))
+}
+
+fn check_union_in_statement(
+    stmt: &Statement,
+    env: &mut UnionEnv,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match stmt {
+        Statement::LocalAssignment(la) => {
+            for (i, name) in la.names.iter().enumerate() {
+                let ty = la.type_annotations.get(i).and_then(|t| t.as_ref());
+                env.register(&name.name, ty);
+            }
+            for val in &la.values {
+                check_union_in_expr(val, env, diagnostics);
+            }
+        }
+        Statement::ClassDecl(decl) => {
+            for member in &decl.members {
+                match member {
+                    ClassMember::Method(m) => {
+                        let mut inner_env = UnionEnv::new();
+                        // Copy outer scope
+                        inner_env.union_vars = env.union_vars.clone();
+                        // Register params
+                        for p in &m.params {
+                            inner_env.register(&p.name.name, p.type_annotation.as_ref());
+                        }
+                        if let Some(body) = &m.body {
+                            check_union_in_block(body, &mut inner_env, diagnostics);
+                        }
+                    }
+                    ClassMember::Constructor(c) => {
+                        let mut inner_env = UnionEnv::new();
+                        inner_env.union_vars = env.union_vars.clone();
+                        for p in &c.params {
+                            inner_env.register(&p.name.name, p.type_annotation.as_ref());
+                        }
+                        check_union_in_block(&c.body, &mut inner_env, diagnostics);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Statement::FunctionDecl(f) => {
+            let mut inner_env = UnionEnv::new();
+            inner_env.union_vars = env.union_vars.clone();
+            for p in &f.params {
+                inner_env.register(&p.name.name, p.type_annotation.as_ref());
+            }
+            check_union_in_block(&f.body, &mut inner_env, diagnostics);
+        }
+        Statement::ExpressionStatement(expr) => {
+            check_union_in_expr(expr, env, diagnostics);
+        }
+        Statement::Assignment(a) => {
+            for val in &a.values {
+                check_union_in_expr(val, env, diagnostics);
+            }
+            for target in &a.targets {
+                check_union_in_expr(target, env, diagnostics);
+            }
+        }
+        Statement::ReturnStatement(r) => {
+            for val in &r.values {
+                check_union_in_expr(val, env, diagnostics);
+            }
+        }
+        Statement::IfStatement(i) => {
+            check_union_in_expr(&i.condition, env, diagnostics);
+            check_union_in_block(&i.then_block, env, diagnostics);
+            for (cond, block) in &i.elseif_clauses {
+                check_union_in_expr(cond, env, diagnostics);
+                check_union_in_block(block, env, diagnostics);
+            }
+            if let Some(block) = &i.else_block {
+                check_union_in_block(block, env, diagnostics);
+            }
+        }
+        Statement::WhileStatement(w) => {
+            check_union_in_expr(&w.condition, env, diagnostics);
+            check_union_in_block(&w.body, env, diagnostics);
+        }
+        Statement::RepeatStatement(r) => {
+            check_union_in_block(&r.body, env, diagnostics);
+            check_union_in_expr(&r.condition, env, diagnostics);
+        }
+        Statement::ForNumeric(f) => {
+            check_union_in_block(&f.body, env, diagnostics);
+        }
+        Statement::ForGeneric(f) => {
+            check_union_in_block(&f.body, env, diagnostics);
+        }
+        Statement::DoBlock(b) => {
+            check_union_in_block(b, env, diagnostics);
+        }
+        _ => {}
+    }
+}
+
+fn check_union_in_block(
+    block: &Block,
+    env: &mut UnionEnv,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for stmt in &block.statements {
+        check_union_in_statement(stmt, env, diagnostics);
+    }
+}
+
+fn check_union_in_expr(
+    expr: &Expression,
+    env: &UnionEnv,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match expr {
+        Expression::FieldAccess(fa) => {
+            // Check if the object is a bare identifier with a union type
+            if is_union_object(&fa.object, env) {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "cannot access member '{}' on a union type; use 'as' to cast to a specific type first",
+                        fa.field.name
+                    ),
+                    fa.span,
+                    "E013",
+                ));
+            }
+            check_union_in_expr(&fa.object, env, diagnostics);
+        }
+        Expression::MethodCall(mc) => {
+            if is_union_object(&mc.object, env) {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "cannot call method '{}' on a union type; use 'as' to cast to a specific type first",
+                        mc.method.name
+                    ),
+                    mc.span,
+                    "E013",
+                ));
+            }
+            check_union_in_expr(&mc.object, env, diagnostics);
+            for arg in &mc.args {
+                check_union_in_expr(arg, env, diagnostics);
+            }
+        }
+        Expression::FunctionCall(fc) => {
+            check_union_in_expr(&fc.callee, env, diagnostics);
+            for arg in &fc.args {
+                check_union_in_expr(arg, env, diagnostics);
+            }
+        }
+        Expression::BinaryOp(bo) => {
+            check_union_in_expr(&bo.left, env, diagnostics);
+            check_union_in_expr(&bo.right, env, diagnostics);
+        }
+        Expression::UnaryOp(uo) => {
+            check_union_in_expr(&uo.operand, env, diagnostics);
+        }
+        Expression::CastExpr(_) => {
+            // The inner expression is being cast — don't check it for union access
+            // (that's the whole point of casting). But recurse into nested exprs.
+        }
+        Expression::IndexAccess(ia) => {
+            check_union_in_expr(&ia.object, env, diagnostics);
+            check_union_in_expr(&ia.index, env, diagnostics);
+        }
+        Expression::TableConstructor(tc) => {
+            for field in &tc.fields {
+                match field {
+                    luao_parser::TableField::NamedField(_, val, _) => {
+                        check_union_in_expr(val, env, diagnostics);
+                    }
+                    luao_parser::TableField::IndexField(key, val, _) => {
+                        check_union_in_expr(key, env, diagnostics);
+                        check_union_in_expr(val, env, diagnostics);
+                    }
+                    luao_parser::TableField::ValueField(val, _) => {
+                        check_union_in_expr(val, env, diagnostics);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Returns true if the expression is a variable reference with a union type.
+/// CastExpr is explicitly NOT union — that's how you narrow.
+fn is_union_object(expr: &Expression, env: &UnionEnv) -> bool {
+    match expr {
+        Expression::Identifier(id) => env.is_union(&id.name),
+        // A cast narrows the type — not a union anymore
+        Expression::CastExpr(_) => false,
+        _ => false,
     }
 }
