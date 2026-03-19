@@ -317,12 +317,20 @@ fn infer_type_from_expr(emitter: &Emitter, expr: &luao_parser::Expression) -> Op
                     let method_name = mc.method.name.as_str();
                     for method in &class.methods {
                         if method.name == method_name {
-                            if let luao_resolver::LuaoType::Class(class_id) = &method.return_type {
-                                for (cname, csym) in &emitter.symbol_table.classes {
-                                    if csym.id == *class_id {
-                                        return Some(cname.clone());
+                            match &method.return_type {
+                                luao_resolver::LuaoType::Class(class_id) => {
+                                    for (cname, csym) in &emitter.symbol_table.classes {
+                                        if csym.id == *class_id {
+                                            return Some(cname.clone());
+                                        }
                                     }
                                 }
+                                luao_resolver::LuaoType::TypeParam(name) => {
+                                    if emitter.symbol_table.classes.contains_key(name) {
+                                        return Some(name.clone());
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -339,12 +347,20 @@ fn infer_type_from_expr(emitter: &Emitter, expr: &luao_parser::Expression) -> Op
                         let method_name = fa.field.name.as_str();
                         for method in &class.methods {
                             if method.name == method_name {
-                                if let luao_resolver::LuaoType::Class(class_id) = &method.return_type {
-                                    for (cname, csym) in &emitter.symbol_table.classes {
-                                        if csym.id == *class_id {
-                                            return Some(cname.clone());
+                                match &method.return_type {
+                                    luao_resolver::LuaoType::Class(class_id) => {
+                                        for (cname, csym) in &emitter.symbol_table.classes {
+                                            if csym.id == *class_id {
+                                                return Some(cname.clone());
+                                            }
                                         }
                                     }
+                                    luao_resolver::LuaoType::TypeParam(name) => {
+                                        if emitter.symbol_table.classes.contains_key(name) {
+                                            return Some(name.clone());
+                                        }
+                                    }
+                                    _ => {}
                                 }
                             }
                         }

@@ -237,13 +237,23 @@ fn maybe_mangle_access(emitter: &mut Emitter, object: &Expression, member_name: 
                 if let Some(class) = emitter.symbol_table.classes.get(&owner_type) {
                     for field in &class.fields {
                         if field.name == field_name {
-                            if let luao_resolver::LuaoType::Class(class_id) = &field.type_info {
-                                for (cname, csym) in &emitter.symbol_table.classes {
-                                    if csym.id == *class_id {
-                                        result = Some(cname.clone());
-                                        break;
+                            match &field.type_info {
+                                luao_resolver::LuaoType::Class(class_id) => {
+                                    for (cname, csym) in &emitter.symbol_table.classes {
+                                        if csym.id == *class_id {
+                                            result = Some(cname.clone());
+                                            break;
+                                        }
                                     }
                                 }
+                                // Cross-file: type was unresolved at resolve time,
+                                // but may now be available in the merged symbol table
+                                luao_resolver::LuaoType::TypeParam(name) => {
+                                    if emitter.symbol_table.classes.contains_key(name) {
+                                        result = Some(name.clone());
+                                    }
+                                }
+                                _ => {}
                             }
                             break;
                         }
@@ -316,12 +326,22 @@ fn resolve_expression_type(emitter: &Emitter, expr: &Expression) -> Option<Strin
             let field_name = fa.field.name.as_str();
             for field in &class.fields {
                 if field.name == field_name {
-                    if let luao_resolver::LuaoType::Class(class_id) = &field.type_info {
-                        for (cname, csym) in &emitter.symbol_table.classes {
-                            if csym.id == *class_id {
-                                return Some(cname.clone());
+                    match &field.type_info {
+                        luao_resolver::LuaoType::Class(class_id) => {
+                            for (cname, csym) in &emitter.symbol_table.classes {
+                                if csym.id == *class_id {
+                                    return Some(cname.clone());
+                                }
                             }
                         }
+                        // Cross-file: type was unresolved at resolve time,
+                        // but may now be available in the merged symbol table
+                        luao_resolver::LuaoType::TypeParam(name) => {
+                            if emitter.symbol_table.classes.contains_key(name) {
+                                return Some(name.clone());
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
