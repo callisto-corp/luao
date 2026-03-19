@@ -119,6 +119,7 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
         Statement::FunctionDecl(fd) => {
             let name = emit_function_name(emitter, fd);
             let params = emitter.emit_params(&fd.params);
+            let saved_var_types = emitter.local_var_types.clone();
             // Track parameter types
             track_param_types(emitter, &fd.params);
             if fd.is_local && !emitter.is_exported(&name) {
@@ -128,6 +129,7 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
             }
             emitter.emit_block(&fd.body);
             emitter.writeln("end");
+            emitter.local_var_types = saved_var_types;
         }
         Statement::IfStatement(if_stmt) => {
             let cond = emit_expression(emitter, &if_stmt.condition);

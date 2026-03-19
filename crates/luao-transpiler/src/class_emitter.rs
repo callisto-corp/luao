@@ -88,7 +88,11 @@ fn emit_constructor(
 
     if !has_super_call {
         if let Some(parent) = parent_name {
-            let parent_new = emitter.mangle_shared("new");
+            let parent_new = if is_parent_extern(emitter, parent_name) {
+                "new".to_string()
+            } else {
+                emitter.mangle_shared("new")
+            };
             emitter.writeln(&format!("local self = {}.{}()", parent, parent_new));
             emitter.writeln(&format!("setmetatable(self, {})", class_name));
         } else {
@@ -97,6 +101,8 @@ fn emit_constructor(
     }
 
     emit_default_fields(emitter, class);
+
+    let saved_var_types = emitter.local_var_types.clone();
 
     // Track constructor parameter types
     for param in &ctor.params {
@@ -115,6 +121,7 @@ fn emit_constructor(
         emit_constructor_statement(emitter, stmt, parent_name, class_name);
     }
 
+    emitter.local_var_types = saved_var_types;
     emitter.writeln("return self");
     emitter.dedent();
     emitter.writeln("end");
@@ -139,7 +146,11 @@ fn emit_default_constructor(
     }
 
     if let Some(parent) = parent_name {
-        let parent_new = if class.is_extern { "new".to_string() } else { emitter.mangle_shared("new") };
+        let parent_new = if is_parent_extern(emitter, parent_name) {
+            "new".to_string()
+        } else {
+            emitter.mangle_shared("new")
+        };
         emitter.writeln(&format!("local self = {}.{}()", parent, parent_new));
         emitter.writeln(&format!("setmetatable(self, {})", class_name));
     } else {
@@ -167,6 +178,16 @@ fn emit_default_fields(emitter: &mut Emitter, class: &ClassDecl) {
             }
         }
     }
+}
+
+/// Check if the parent class (by name) is marked as extern in the symbol table.
+fn is_parent_extern(emitter: &Emitter, parent_name: &Option<String>) -> bool {
+    if let Some(parent) = parent_name {
+        if let Some(cls) = emitter.symbol_table.classes.get(parent) {
+            return cls.is_extern;
+        }
+    }
+    false
 }
 
 fn is_super_new_call(stmt: &luao_parser::Statement) -> bool {
@@ -197,7 +218,11 @@ fn emit_constructor_statement(
                             .map(|a| emit_expression(emitter, a))
                             .collect::<Vec<_>>()
                             .join(", ");
-                        let parent_new = emitter.mangle_shared("new");
+                        let parent_new = if is_parent_extern(emitter, parent_name) {
+                            "new".to_string()
+                        } else {
+                            emitter.mangle_shared("new")
+                        };
                         emitter.writeln(&format!("local self = {}.{}({})", parent, parent_new, args));
                         emitter.writeln(&format!("setmetatable(self, {})", class_name));
                         return;
@@ -270,6 +295,7 @@ fn emit_method(
 
     if let Some(ref body) = method.body {
         let saved_parent = emitter.current_class_parent.clone();
+        let saved_var_types = emitter.local_var_types.clone();
         emitter.current_class_parent = parent_name.clone();
         // Track method parameter types
         for param in &method.params {
@@ -285,6 +311,7 @@ fn emit_method(
         }
         emitter.emit_block(body);
         emitter.current_class_parent = saved_parent;
+        emitter.local_var_types = saved_var_types;
     }
 
     emitter.writeln("end");
@@ -380,7 +407,10 @@ fn emit_properties(emitter: &mut Emitter, class: &ClassDecl, class_name: &str) {
             "if type({}) == \"table\" then return {}[k] end",
             original_index, original_index
         ));
-        emitter.writeln(&format!("return {}", original_index));
+        emitter.writeln(&format!(
+            "if type({}) == \"function\" then return {}(t, k) end",
+            original_index, original_index
+        ));
         emitter.dedent();
         emitter.writeln("end");
         emitter.newline();

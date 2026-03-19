@@ -70,6 +70,7 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
         }
         Expression::FunctionExpr(fe) => {
             let params = emitter.emit_params(&fe.params);
+            let saved_var_types = emitter.local_var_types.clone();
             // Track function expression parameter types
             for param in &fe.params {
                 if param.is_vararg { continue; }
@@ -89,6 +90,7 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
             result.push_str(&body);
             emitter.write_indent();
             result.push_str("end");
+            emitter.local_var_types = saved_var_types;
             result
         }
         Expression::TableConstructor(tc) => {

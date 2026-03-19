@@ -184,9 +184,9 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
         None
     };
 
-    // Shared type map across all files — so type info from one file's exports
-    // is available when other files access those variables
-    let mut shared_var_types: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    // Per-file exported type map: final_export_name → class_type.
+    // Only exported names propagate; each file's emitter is seeded only with its imports.
+    let mut exported_var_types: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
     // Transpile each statement individually, collecting metadata
     #[allow(dead_code)]
@@ -262,16 +262,36 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
             emitter.no_self = options.no_self;
             emitter.local_renames = rename_map.clone();
             emitter.import_aliases = alias_map.clone();
-            emitter.local_var_types = shared_var_types.clone();
+            // Seed emitter with type info only for names this file imports
+            for (alias, final_name) in &alias_map {
+                if let Some(ty) = exported_var_types.get(final_name) {
+                    emitter.local_var_types.insert(alias.clone(), ty.clone());
+                }
+            }
+            // Also seed imported names that weren't aliased (same name)
+            if let Some(res) = file_import_resolution.get(path) {
+                for (alias, final_name) in res {
+                    if let Some(ty) = exported_var_types.get(final_name) {
+                        emitter.local_var_types.insert(alias.clone(), ty.clone());
+                    }
+                }
+            }
 
             emitter.emit_statement(actual_stmt);
 
             let code = std::mem::take(&mut emitter.output);
             let needs_instanceof = emitter.needs_instanceof;
             let needs_enum_freeze = emitter.needs_enum_freeze;
-            // Carry forward type info learned from this statement
-            for (k, v) in &emitter.local_var_types {
-                shared_var_types.insert(k.clone(), v.clone());
+            // Carry forward type info only for exported names
+            let exported_set: std::collections::HashSet<&str> = module.exports.iter().map(|s| s.as_str()).collect();
+            for name in &defines {
+                if exported_set.contains(name.as_str()) {
+                    if let Some(v) = emitter.local_var_types.get(name) {
+                        // Store under the final (possibly renamed) export name
+                        let final_name = rename_map.get(name).cloned().unwrap_or_else(|| name.clone());
+                        exported_var_types.insert(final_name, v.clone());
+                    }
+                }
             }
             shared_mangler = emitter.mangler.take();
 
