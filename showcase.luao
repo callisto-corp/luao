@@ -1,0 +1,190 @@
+-- ============================================================
+-- Generators
+-- ============================================================
+
+-- Simple range iterator
+generator function range(start: number, stop: number): number
+    for i = start, stop do
+        yield i
+    end
+end
+
+-- Infinite fibonacci (caller decides when to stop)
+generator function fibonacci(): number
+    local a = 0
+    local b = 1
+    while true do
+        yield a
+        local next = a + b
+        a = b
+        b = next
+    end
+end
+
+-- Filter generator — takes another iterator
+generator function filter(iter: any, predicate: any): any
+    for value in iter do
+        if predicate(value) then
+            yield value
+        end
+    end
+end
+
+-- Map generator
+generator function map(iter: any, transform: any): any
+    for value in iter do
+        yield transform(value)
+    end
+end
+
+-- Class with generator methods
+class Deck
+    private cards: table
+
+    new()
+        self.cards = {}
+        local suits = {"Hearts", "Diamonds", "Clubs", "Spades"}
+        local ranks = {"A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"}
+        for _, suit in ipairs(suits) do
+            for _, rank in ipairs(ranks) do
+                table.insert(self.cards, rank .. " of " .. suit)
+            end
+        end
+    end
+
+    generator function deal(count: number): string
+        for i = 1, count do
+            if #self.cards == 0 then
+                return
+            end
+            yield table.remove(self.cards, 1)
+        end
+    end
+
+    generator function all(): string
+        for _, card in ipairs(self.cards) do
+            yield card
+        end
+    end
+end
+
+-- ============================================================
+-- Async / Await
+-- ============================================================
+
+-- Simulate an async data fetch
+async function fetchUser(id: number): table
+    return { id = id, name = "User" .. id, email = "user" .. id .. "@example.com" }
+end
+
+async function fetchPosts(userId: number): table
+    return {
+        { title = "First Post", author = userId },
+        { title = "Second Post", author = userId },
+    }
+end
+
+-- Compose async functions
+async function fetchUserWithPosts(id: number): table
+    local user = await fetchUser(id)
+    local posts = await fetchPosts(user.id)
+    return { user = user, posts = posts }
+end
+
+-- Async error handling
+async function riskyOperation(): string
+    error("something went wrong")
+end
+
+-- Async class method
+class DataService
+    private prefix: string
+
+    new(prefix: string)
+        self.prefix = prefix
+    end
+
+    async function getData(key: string): string
+        return self.prefix .. ":" .. key
+    end
+
+    async function getMultiple(keys: table): table
+        local results = {}
+        for _, key in ipairs(keys) do
+            local val = await self:getData(key)
+            table.insert(results, val)
+        end
+        return results
+    end
+end
+
+-- ============================================================
+-- Run everything
+-- ============================================================
+
+print("=== Generators ===")
+
+-- Range
+print("Range 1-5:")
+for v in range(1, 5) do
+    io.write(v .. " ")
+end
+print()
+
+-- First 10 fibonacci numbers
+print("Fibonacci (first 10):")
+local count = 0
+for fib in fibonacci() do
+    io.write(fib .. " ")
+    count = count + 1
+    if count >= 10 then break end
+end
+print()
+
+-- Chained generators: even squares
+print("Even squares up to 100:")
+local squares = map(range(1, 10), function(x) return x * x end)
+local even_squares = filter(squares, function(x) return x % 2 == 0 end)
+for v in even_squares do
+    io.write(v .. " ")
+end
+print()
+
+-- Class generator
+print("Dealing 5 cards:")
+local deck = Deck.new()
+for card in deck:deal(5) do
+    print("  " .. card)
+end
+
+print("\n=== Async/Await ===")
+
+-- Simple async
+fetchUser(42):andThen(function(user, err)
+    print("User: " .. user.name .. " <" .. user.email .. ">")
+end)
+
+-- Composed async
+fetchUserWithPosts(1):andThen(function(data, err)
+    print("User: " .. data.user.name)
+    print("Posts: " .. #data.posts)
+    for _, post in ipairs(data.posts) do
+        print("  - " .. post.title)
+    end
+end)
+
+-- Error handling
+riskyOperation():andThen(function(result, err)
+    if err then
+        print("Caught error: " .. tostring(err))
+    end
+end)
+
+-- Async class method
+local svc = DataService.new("cache")
+svc:getMultiple({"alpha", "beta", "gamma"}):andThen(function(results, err)
+    print("Service results:")
+    for _, r in ipairs(results) do
+        print("  " .. r)
+    end
+end)

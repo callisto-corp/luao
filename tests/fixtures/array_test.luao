@@ -1,0 +1,71 @@
+-- Array literals
+local nums = [1, 2, 3, 4, 5]
+local empty = []
+local words = ["hello", "world"]
+
+-- Push/pop
+nums:push(6)
+local last = nums:pop()
+print("popped: " .. last)
+
+-- Map/filter/reduce
+local doubled = nums:map(function(x) return x * 2 end)
+local evens = nums:filter(function(x) return x % 2 == 0 end)
+local sum = nums:reduce(function(acc, x) return acc + x end, 0)
+
+print("doubled: " .. tostring(doubled))
+print("evens: " .. tostring(evens))
+print("sum: " .. sum)
+
+-- Find/includes
+print("includes 3: " .. tostring(nums:includes(3)))
+print("indexOf 4: " .. nums:indexOf(4))
+
+-- Chaining
+local result = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    :filter(function(x) return x % 2 == 0 end)
+    :map(function(x) return x * x end)
+    :reduce(function(acc, x) return acc + x end, 0)
+print("chain result: " .. result)
+
+-- Iteration
+print("forEach:")
+;[10, 20, 30]:forEach(function(v, i)
+    print("  [" .. i .. "] = " .. v)
+end)
+
+-- Sort/reverse
+local sorted = [3, 1, 4, 1, 5, 9, 2, 6]:sort()
+print("sorted: " .. tostring(sorted))
+
+local reversed = [1, 2, 3]:reverse()
+print("reversed: " .. tostring(reversed))
+
+-- Join
+print("joined: " .. ["a", "b", "c"]:join(", "))
+
+-- Slice
+print("slice: " .. tostring([1, 2, 3, 4, 5]:slice(2, 4)))
+
+-- Concat
+print("concat: " .. tostring([1, 2] .. [3, 4]))
+
+-- Static methods
+local r = Array.range(1, 5)
+print("range: " .. tostring(r))
+
+print("isArray: " .. tostring(Array.isArray([1, 2])))
+print("isArray table: " .. tostring(Array.isArray({1, 2})))
+
+-- Flat
+local a1 = [1, 2]
+local a2 = [3, 4]
+local nested = [a1, a2]
+print("flat: " .. tostring(nested:flat()))
+
+-- Every/some
+print("every > 0: " .. tostring([1, 2, 3]:every(function(x) return x > 0 end)))
+print("some > 2: " .. tostring([1, 2, 3]:some(function(x) return x > 2 end)))
+
+-- Length
+print("length: " .. #[10, 20, 30])

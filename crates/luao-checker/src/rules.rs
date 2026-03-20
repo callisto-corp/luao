@@ -422,6 +422,7 @@ impl<'a> TypeEnv<'a> {
                 LuaoType::Function(param_types, Box::new(ret))
             }
             Expression::TableConstructor(_) => LuaoType::Unknown,
+            Expression::ArrayLiteral(_) => LuaoType::Unknown,
             Expression::IndexAccess(_) => LuaoType::Unknown,
             Expression::IfExpression(ie) => {
                 self.infer_expr(&ie.then_expr)
@@ -1896,7 +1897,8 @@ fn check_types_in_expr(
                 UnOp::Len => {
                     if !matches!(operand_ty, LuaoType::Unknown | LuaoType::Any |
                                            LuaoType::String | LuaoType::Table(_, _) |
-                                           LuaoType::Array(_)) {
+                                           LuaoType::Array(_) | LuaoType::Class(_) |
+                                           LuaoType::TypeParam(_)) {
                         if !has_unary_metamethod(&operand_ty, "__len", env.symbols) {
                             diagnostics.push(Diagnostic::error(
                                 format!(

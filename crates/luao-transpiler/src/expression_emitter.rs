@@ -200,6 +200,17 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
             let expr = emit_expression(emitter, &ae.expr);
             format!("__luao_await({})", expr)
         }
+        Expression::ArrayLiteral(al) => {
+            emitter.needs_array = true;
+            if al.elements.is_empty() {
+                "__luao_Array()".to_string()
+            } else {
+                let elems: Vec<_> = al.elements.iter()
+                    .map(|e| emit_expression(emitter, e))
+                    .collect();
+                format!("__luao_Array({{ {} }})", elems.join(", "))
+            }
+        }
         Expression::IfExpression(ie) => {
             // Luau if-expression → Lua ternary idiom using `and`/`or` for simple cases,
             // or an IIFE for complex cases with elseif.

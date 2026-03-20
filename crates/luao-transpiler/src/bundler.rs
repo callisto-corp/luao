@@ -203,6 +203,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
         needs_enum_freeze: bool,
         needs_abstract_guard: bool,
         needs_async: bool,
+        needs_array: bool,
     }
 
     let mut items: Vec<EmittedItem> = Vec::new();
@@ -286,6 +287,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
             let needs_enum_freeze = emitter.needs_enum_freeze;
             let needs_abstract_guard = emitter.needs_abstract_guard;
             let needs_async = emitter.needs_async;
+            let needs_array = emitter.needs_array;
             // Carry forward type info only for exported names
             let exported_set: std::collections::HashSet<&str> = module.exports.iter().map(|s| s.as_str()).collect();
             for name in &defines {
@@ -311,6 +313,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
                 needs_enum_freeze,
                 needs_abstract_guard,
                 needs_async,
+                needs_array,
             });
         }
     }
@@ -378,11 +381,13 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
     let mut runtime_needs_enum_freeze = false;
     let mut runtime_needs_abstract_guard = false;
     let mut runtime_needs_async = false;
+    let mut runtime_needs_array = false;
     for &idx in &ordered {
         if items[idx].needs_instanceof { runtime_needs_instanceof = true; }
         if items[idx].needs_enum_freeze { runtime_needs_enum_freeze = true; }
         if items[idx].needs_abstract_guard { runtime_needs_abstract_guard = true; }
         if items[idx].needs_async { runtime_needs_async = true; }
+        if items[idx].needs_array { runtime_needs_array = true; }
     }
 
     let mut bundle = String::new();
@@ -401,6 +406,10 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
     }
     if runtime_needs_async {
         bundle.push_str(crate::runtime::ASYNC_RUNTIME);
+        bundle.push_str("\n\n");
+    }
+    if runtime_needs_array {
+        bundle.push_str(crate::runtime::ARRAY_RUNTIME);
         bundle.push_str("\n\n");
     }
 
@@ -889,6 +898,11 @@ fn collect_expr_idents(expr: &luao_parser::Expression, out: &mut HashSet<String>
         }
         AwaitExpr(ae) => {
             collect_expr_idents(&ae.expr, out);
+        }
+        ArrayLiteral(al) => {
+            for elem in &al.elements {
+                collect_expr_idents(elem, out);
+            }
         }
         _ => {}
     }

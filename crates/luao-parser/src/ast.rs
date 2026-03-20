@@ -363,6 +363,7 @@ pub enum Expression {
     IfExpression(Box<IfExpr>),
     YieldExpr(Box<YieldExpr>),
     AwaitExpr(Box<AwaitExpr>),
+    ArrayLiteral(Box<ArrayLiteral>),
 }
 
 impl Expression {
@@ -390,6 +391,7 @@ impl Expression {
             Expression::IfExpression(i) => i.span,
             Expression::YieldExpr(y) => y.span,
             Expression::AwaitExpr(a) => a.span,
+            Expression::ArrayLiteral(a) => a.span,
         }
     }
 }
@@ -539,5 +541,11 @@ pub struct YieldExpr {
 #[derive(Debug, Clone)]
 pub struct AwaitExpr {
     pub expr: Expression,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArrayLiteral {
+    pub elements: Vec<Expression>,
     pub span: Span,
 }

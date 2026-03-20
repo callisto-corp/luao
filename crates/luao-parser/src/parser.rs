@@ -1651,6 +1651,27 @@ impl Parser {
                     span: start.merge(end),
                 })))
             }
+            TokenKind::LeftBracket => {
+                let start = self.current_span();
+                self.advance(); // consume '['
+                let mut elements = Vec::new();
+                if !self.check(TokenKind::RightBracket) {
+                    elements.push(self.parse_expression()?);
+                    while self.check(TokenKind::Comma) {
+                        self.advance();
+                        if self.check(TokenKind::RightBracket) {
+                            break; // trailing comma
+                        }
+                        elements.push(self.parse_expression()?);
+                    }
+                }
+                self.expect(TokenKind::RightBracket)?;
+                let end = self.previous_span();
+                Ok(Expression::ArrayLiteral(Box::new(ArrayLiteral {
+                    elements,
+                    span: start.merge(end),
+                })))
+            }
             TokenKind::LeftBrace => {
                 let table = self.parse_table_constructor()?;
                 Ok(Expression::TableConstructor(Box::new(table)))
@@ -2161,6 +2182,7 @@ impl Parser {
                 | TokenKind::Hash
                 | TokenKind::Tilde
                 | TokenKind::LeftBrace
+                | TokenKind::LeftBracket
                 | TokenKind::Function
                 | TokenKind::True
                 | TokenKind::False
