@@ -1,6 +1,6 @@
 # Luao
 
-A superset of Lua with classes, interfaces, enums, and more — all transpiling down to plain Lua tables and metatables.
+A superset of Lua with classes, interfaces, enums, generators, async/await, and more — all transpiling down to plain Lua tables, metatables, and coroutines.
 
 ```lua
 class Animal
@@ -312,6 +312,92 @@ local b = new Vec2(3, 4)
 print(tostring(a + b))  -- (4, 6)
 ```
 
+### Generators
+
+Lazy iterators powered by Lua coroutines. Work directly with `for...in`.
+
+```lua
+generator function fibonacci(limit: number): number
+    local a = 0
+    local b = 1
+    while a <= limit do
+        yield a
+        a, b = b, a + b
+    end
+end
+
+for fib in fibonacci(100) do
+    print(fib)  -- 0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89
+end
+```
+
+Works in classes too:
+
+```lua
+class Range
+    private start: number
+    private stop: number
+
+    new(start: number, stop: number)
+        self.start = start
+        self.stop = stop
+    end
+
+    generator function values(): number
+        for i = self.start, self.stop do
+            yield i
+        end
+    end
+end
+
+for v in Range.new(1, 5):values() do
+    print(v)
+end
+```
+
+Transpiles to `coroutine.wrap` — zero overhead, pure Lua coroutines.
+
+### Async / Await
+
+Coroutine-based async with a lightweight task system.
+
+```lua
+async function fetchUser(id: number): table
+    local data = await httpGet("/users/" .. id)
+    return json.decode(data)
+end
+
+-- Chain with callbacks
+fetchUser(1):andThen(function(user, err)
+    print(user.name)
+end)
+
+-- Compose async functions
+async function fetchBoth(): table
+    local user = await fetchUser(1)
+    local posts = await fetchPosts(user.id)
+    return { user = user, posts = posts }
+end
+```
+
+Async class methods:
+
+```lua
+class Api
+    private baseUrl: string
+
+    new(baseUrl: string)
+        self.baseUrl = baseUrl
+    end
+
+    async function get(path: string): table
+        return await httpGet(self.baseUrl .. path)
+    end
+end
+```
+
+Tasks auto-resolve synchronous values. Errors propagate through `andThen(fn(result, err))`.
+
 ### Static Members
 
 ```lua
@@ -427,7 +513,7 @@ Enforced at compile time. Private fields get a `_` prefix in the output as a saf
 | `luao-lexer` | Tokenizer for Lua + Luao keywords |
 | `luao-parser` | Recursive descent parser with Pratt expression parsing |
 | `luao-resolver` | Scope tracking, symbol table construction |
-| `luao-checker` | Access modifiers, abstract/sealed/interface/readonly enforcement |
+| `luao-checker` | Type checking, access modifiers, abstract/sealed/interface/readonly/async/generator enforcement |
 | `luao-transpiler` | Code generation using `full_moon` for output formatting |
 | `luao-lsp` | Language server with `tower-lsp` |
 | `luao-cli` | CLI: `build`, `check`, `lsp` subcommands |
