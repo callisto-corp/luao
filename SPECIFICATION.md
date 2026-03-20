@@ -24,9 +24,11 @@
 14. [Type Annotations](#14-type-annotations)
 15. [The `override` Keyword](#15-the-override-keyword)
 16. [The `instanceof` Operator](#16-the-instanceof-operator)
-17. [Grammar (EBNF)](#17-grammar-ebnf)
-18. [Transpilation Reference](#18-transpilation-reference)
-19. [Runtime Library](#19-runtime-library)
+17. [Generators](#17-generators)
+18. [Async and Await](#18-async-and-await)
+19. [Grammar (EBNF)](#19-grammar-ebnf)
+20. [Transpilation Reference](#20-transpilation-reference)
+21. [Runtime Library](#21-runtime-library)
 
 ---
 
@@ -63,7 +65,7 @@ Throughout this specification:
 
 - `LUAO` refers to Luao source code (input).
 - `LUA` refers to the generated Lua 5.4 code (output).
-- Grammar productions use EBNF notation as defined in [Section 17](#17-grammar-ebnf).
+- Grammar productions use EBNF notation as defined in [Section 19](#19-grammar-ebnf).
 
 ---
 
@@ -151,7 +153,7 @@ print(p:greet()) -- "Hello, I am Alice"
 
 ### Transpilation
 
-A class transpiles to a Lua table that serves as both the class object and the metatable for instances. See [Section 18](#18-transpilation-reference) for full examples.
+A class transpiles to a Lua table that serves as both the class object and the metatable for instances. See [Section 20](#20-transpilation-reference) for full examples.
 
 The general pattern is:
 
@@ -610,7 +612,7 @@ function Shape.new(color)
 end
 ```
 
-See [Section 19](#19-runtime-library) for the definition of `__luao_abstract_guard`.
+See [Section 21](#21-runtime-library) for the definition of `__luao_abstract_guard`.
 
 ---
 
@@ -891,7 +893,7 @@ local Direction = __luao_enum_freeze("Direction", {
 })
 ```
 
-See [Section 19](#19-runtime-library) for the definition of `__luao_enum_freeze`.
+See [Section 21](#21-runtime-library) for the definition of `__luao_enum_freeze`.
 
 ---
 
@@ -1234,7 +1236,7 @@ if __luao_instanceof(dog, Animal) then
 end
 ```
 
-See [Section 19](#19-runtime-library) for the definition of `__luao_instanceof`.
+See [Section 21](#21-runtime-library) for the definition of `__luao_instanceof`.
 
 ### Usage with Variables
 
@@ -1251,9 +1253,268 @@ local isAnimal: boolean = dog instanceof Animal
 
 ---
 
-## 17. Grammar (EBNF)
+## 17. Generators
 
-This section provides a formal EBNF grammar for all Luao-specific syntactic extensions. The base Lua 5.4 grammar is assumed as defined in the [Lua 5.4 Reference Manual, Section 9](https://www.lua.org/manual/5.4/manual.html#9) and is extended with the following productions.
+Generator functions produce a sequence of values lazily using the `yield` keyword. They transpile to Lua coroutines and work directly with Lua's `for...in` loop.
+
+### Syntax
+
+A generator function is declared with the `generator` keyword before `function`:
+
+```
+generator function range(start: number, stop: number): number
+    for i = start, stop do
+        yield i
+    end
+end
+```
+
+### The `yield` Keyword
+
+- `yield value` suspends the generator and produces `value` to the caller.
+- `yield` with no value produces `nil`.
+- `yield` is only valid inside a generator function. Using it elsewhere is a compile error (E021).
+
+### Usage
+
+Generator functions return an iterator function compatible with Lua's generic `for`:
+
+```
+for v in range(1, 5) do
+    print(v) -- 1, 2, 3, 4, 5
+end
+```
+
+### Generator Methods
+
+Class methods may be generators:
+
+```
+class NumberRange
+    private start: number
+    private stop: number
+
+    new(start: number, stop: number)
+        self.start = start
+        self.stop = stop
+    end
+
+    generator function values(): number
+        for i = self.start, self.stop do
+            yield i
+        end
+    end
+
+    generator function evens(): number
+        for i = self.start, self.stop do
+            if i % 2 == 0 then
+                yield i
+            end
+        end
+    end
+end
+
+local r = NumberRange.new(1, 10)
+for v in r:evens() do
+    print(v) -- 2, 4, 6, 8, 10
+end
+```
+
+### Anonymous Generators
+
+Generator function expressions are also supported:
+
+```
+local squares = generator function(n: number): number
+    for i = 1, n do
+        yield i * i
+    end
+end
+
+for s in squares(5) do
+    print(s) -- 1, 4, 9, 16, 25
+end
+```
+
+### Transpilation
+
+Generator functions transpile to `coroutine.wrap`, which returns an iterator function. `yield` transpiles to `coroutine.yield`. There is zero runtime library overhead — only standard Lua coroutine functions are used.
+
+```lua
+-- LUA output
+function range(start, stop)
+    return coroutine.wrap(function()
+        for i = start, stop do
+            coroutine.yield(i)
+        end
+    end)
+end
+```
+
+For class methods:
+
+```lua
+-- LUA output
+function NumberRange:values()
+    return coroutine.wrap(function()
+        for i = self.start, self.stop do
+            coroutine.yield(i)
+        end
+    end)
+end
+```
+
+The outer method's `self` is captured by the inner closure automatically via Lua's upvalue mechanism.
+
+---
+
+## 18. Async and Await
+
+Async functions enable coroutine-based concurrency. An async function returns a **Task** object that can be chained with callbacks or awaited from other async functions.
+
+### Syntax
+
+An async function is declared with the `async` keyword before `function`:
+
+```
+async function fetchData(url: string): string
+    local response = await httpGet(url)
+    return response
+end
+```
+
+### The `await` Keyword
+
+- `await expr` suspends the current async function until `expr` resolves.
+- If `expr` is a Task (returned by another async function), the current function resumes when that Task completes.
+- If `expr` is a plain value, the function resumes immediately with that value.
+- `await` is only valid inside an async function. Using it elsewhere is a compile error (E022).
+
+### Task Objects
+
+Async functions return a Task object with the following interface:
+
+| Method | Description |
+|--------|-------------|
+| `task:andThen(callback)` | Registers a callback `function(result, err)` called when the task completes. Returns the task for chaining. |
+| `task:await()` | Blocks (via coroutine yields) until the task completes. Returns the result or raises the error. |
+| `task._status` | `"pending"`, `"resolved"`, or `"rejected"` |
+| `task._result` | The resolved value (when status is `"resolved"`) |
+| `task._error` | The error value (when status is `"rejected"`) |
+
+### Usage
+
+```
+-- Fire and chain
+local task = fetchData("http://example.com")
+task:andThen(function(result, err)
+    if err then
+        print("Error: " .. err)
+    else
+        print("Got: " .. result)
+    end
+end)
+
+-- Await inside another async function
+async function pipeline(): string
+    local raw = await fetchData("http://example.com")
+    local processed = await transform(raw)
+    return processed
+end
+```
+
+### Async Methods
+
+Class methods may be async:
+
+```
+class Api
+    private baseUrl: string
+
+    new(baseUrl: string)
+        self.baseUrl = baseUrl
+    end
+
+    async function get(path: string): table
+        return await httpGet(self.baseUrl .. path)
+    end
+
+    async function getUser(id: number): table
+        return await self:get("/users/" .. id)
+    end
+end
+```
+
+### Error Handling
+
+If an async function throws an error (via `error()`), the task is rejected. The error is passed as the second argument to `andThen` callbacks:
+
+```
+async function failingTask(): void
+    error("something went wrong")
+end
+
+failingTask():andThen(function(result, err)
+    print(err) -- "something went wrong"
+end)
+```
+
+### Nested Awaits
+
+When an async function awaits another Task, the runtime automatically chains them. The outer task remains pending until all inner awaits resolve:
+
+```
+async function step1(): number
+    return 10
+end
+
+async function step2(): number
+    local x = await step1()
+    return x * 2
+end
+
+async function step3(): number
+    local y = await step2()
+    return y + 1
+end
+
+step3():andThen(function(result, err)
+    print(result) -- 21
+end)
+```
+
+### Transpilation
+
+Async functions transpile to `__luao_async(function() ... end)`. `await` transpiles to `__luao_await(expr)`.
+
+```lua
+-- LUA output
+function fetchData(url)
+    return __luao_async(function()
+        local response = __luao_await(httpGet(url))
+        return response
+    end)
+end
+```
+
+For class methods:
+
+```lua
+-- LUA output
+function Api:get(path)
+    return __luao_async(function()
+        return __luao_await(httpGet(self.baseUrl .. path))
+    end)
+end
+```
+
+See [Section 21](#21-runtime-library) for the definitions of `__luao_async` and `__luao_await`.
+
+---
+
+## 19. Grammar (EBNF)
+
+This section provides a formal EBNF grammar for all Luao-specific syntactic extensions, including generators and async/await. The base Lua 5.4 grammar is assumed as defined in the [Lua 5.4 Reference Manual, Section 9](https://www.lua.org/manual/5.4/manual.html#9) and is extended with the following productions.
 
 Terminals are shown in `'single quotes'` or as `UPPER_CASE` token names. Non-terminals are in `CamelCase`. `{ X }` means zero or more repetitions of X. `[ X ]` means X is optional. `( X | Y )` means a choice between X and Y.
 
@@ -1265,7 +1526,9 @@ Terminals are shown in `'single quotes'` or as `UPPER_CASE` token names. Non-ter
 stat        = lua54_stat
             | classdecl
             | interfacedecl
-            | enumdecl ;
+            | enumdecl
+            | genfuncdecl
+            | asyncfuncdecl ;
 
 (* ============================================================ *)
 (* Class Declaration                                             *)
@@ -1307,7 +1570,7 @@ constructordecl = 'new' , '(' , [ parlist ] , ')' , block , 'end' ;
 (* ============================================================ *)
 
 methoddecl  = [ accessmod ] , [ 'static' ] , [ 'abstract' ] ,
-              [ 'override' ] ,
+              [ 'override' ] , [ 'async' ] , [ 'generator' ] ,
               'function' , NAME ,
               [ genericparams ] ,
               '(' , [ parlist ] , ')' ,
@@ -1407,12 +1670,35 @@ param       = NAME , [ ':' , type ] , [ '=' , exp ] ;
 namelist    = NAME , { ',' , NAME } ;
 
 (* ============================================================ *)
+(* Generator Function Declaration                                *)
+(* ============================================================ *)
+
+genfuncdecl = [ 'local' ] , 'generator' , 'function' , NAME ,
+              [ genericparams ] ,
+              '(' , [ parlist ] , ')' ,
+              [ ':' , type ] ,
+              block , 'end' ;
+
+(* ============================================================ *)
+(* Async Function Declaration                                    *)
+(* ============================================================ *)
+
+asyncfuncdecl = [ 'local' ] , 'async' , [ 'generator' ] ,
+                'function' , NAME ,
+                [ genericparams ] ,
+                '(' , [ parlist ] , ')' ,
+                [ ':' , type ] ,
+                block , 'end' ;
+
+(* ============================================================ *)
 (* Expression Extensions                                         *)
 (* ============================================================ *)
 
 exp         = lua54_exp
             | exp , 'instanceof' , NAME
-            | 'super' , '.' , NAME , '(' , [ explist ] , ')' ;
+            | 'super' , '.' , NAME , '(' , [ explist ] , ')'
+            | 'yield' , [ exp ]
+            | 'await' , exp ;
 
 (* ============================================================ *)
 (* Super Expressions                                             *)
@@ -1432,15 +1718,19 @@ exp         = lua54_exp
 
 3. **Operator precedence.** The `instanceof` operator has the same precedence level as comparison operators (`<`, `>`, `<=`, `>=`, `==`, `~=`).
 
-4. **Contextual keywords.** The following identifiers are contextual keywords, meaning they are only reserved in specific syntactic positions and may still be used as variable names in Lua code: `class`, `interface`, `enum`, `extends`, `implements`, `abstract`, `sealed`, `static`, `readonly`, `override`, `public`, `private`, `protected`, `get`, `set`, `new`, `super`, `instanceof`.
+4. **Contextual keywords.** The following identifiers are contextual keywords, meaning they are only reserved in specific syntactic positions and may still be used as variable names in Lua code: `class`, `interface`, `enum`, `extends`, `implements`, `abstract`, `sealed`, `static`, `readonly`, `override`, `public`, `private`, `protected`, `get`, `set`, `new`, `super`, `instanceof`, `async`, `await`, `yield`, `generator`.
+
+5. **Yield expression termination.** `yield` with no following expression produces `nil`. The parser determines whether a value follows by checking if the next token can begin an expression.
+
+6. **Await precedence.** `await` has the same precedence as unary operators (`not`, `-`, `#`, `~`).
 
 ---
 
-## 18. Transpilation Reference
+## 20. Transpilation Reference
 
 This section shows complete input/output pairs for each major feature.
 
-### 18.1 Basic Class
+### 20.1 Basic Class
 
 **LUAO input:**
 
@@ -1490,7 +1780,7 @@ function Point:__tostring()
 end
 ```
 
-### 18.2 Inheritance and `super`
+### 20.2 Inheritance and `super`
 
 **LUAO input:**
 
@@ -1553,7 +1843,7 @@ function Dog:speak()
 end
 ```
 
-### 18.3 Abstract Class
+### 20.3 Abstract Class
 
 **LUAO input:**
 
@@ -1611,7 +1901,7 @@ function Circle:area()
 end
 ```
 
-### 18.4 Static Members
+### 20.4 Static Members
 
 **LUAO input:**
 
@@ -1655,7 +1945,7 @@ function Counter.reset()
 end
 ```
 
-### 18.5 Interfaces
+### 20.5 Interfaces
 
 **LUAO input:**
 
@@ -1705,7 +1995,7 @@ function User:deserialize(data)
 end
 ```
 
-### 18.6 Enum
+### 20.6 Enum
 
 **LUAO input:**
 
@@ -1731,7 +2021,7 @@ local Color = __luao_enum_freeze("Color", {
 })
 ```
 
-### 18.7 Property Getters/Setters
+### 20.7 Property Getters/Setters
 
 **LUAO input:**
 
@@ -1797,7 +2087,7 @@ end
 
 Note: Inside the constructor, `rawset` is used for initial field assignment when `__newindex` interceptors are present, to avoid triggering setters during construction of backing fields.
 
-### 18.8 `instanceof`
+### 20.8 `instanceof`
 
 **LUAO input:**
 
@@ -1817,7 +2107,7 @@ if __luao_instanceof(d, Animal) then
 end
 ```
 
-### 18.9 Type Annotations (Erasure)
+### 20.9 Type Annotations (Erasure)
 
 **LUAO input:**
 
@@ -1843,7 +2133,7 @@ function process(data, count)
 end
 ```
 
-### 18.10 Generics (Erasure)
+### 20.10 Generics (Erasure)
 
 **LUAO input:**
 
@@ -1877,9 +2167,144 @@ end
 local p = Pair.new("hello", 42)
 ```
 
+### 20.11 Generator Function
+
+**LUAO input:**
+
+```
+generator function range(start, stop)
+    for i = start, stop do
+        yield i
+    end
+end
+```
+
+**Lua output:**
+
+```lua
+function range(start, stop)
+    return coroutine.wrap(function()
+        for i = start, stop do
+            coroutine.yield(i)
+        end
+    end)
+end
+```
+
+### 20.12 Generator Class Method
+
+**LUAO input:**
+
+```
+class Range
+    private start: number
+    private stop: number
+
+    new(start: number, stop: number)
+        self.start = start
+        self.stop = stop
+    end
+
+    generator function values(): number
+        for i = self.start, self.stop do
+            yield i
+        end
+    end
+end
+```
+
+**Lua output:**
+
+```lua
+local Range = {}
+Range.__index = Range
+
+function Range.new(start, stop)
+    local self = setmetatable({}, Range)
+    Range._init(self, start, stop)
+    return self
+end
+
+function Range._init(self, start, stop)
+    self.start = start
+    self.stop = stop
+end
+
+function Range:values()
+    return coroutine.wrap(function()
+        for i = self.start, self.stop do
+            coroutine.yield(i)
+        end
+    end)
+end
+```
+
+### 20.13 Async Function
+
+**LUAO input:**
+
+```
+async function fetchData(url: string): string
+    local response = await httpGet(url)
+    return response
+end
+```
+
+**Lua output:**
+
+```lua
+function fetchData(url)
+    return __luao_async(function()
+        local response = __luao_await(httpGet(url))
+        return response
+    end)
+end
+```
+
+### 20.14 Async Class Method
+
+**LUAO input:**
+
+```
+class Api
+    private baseUrl: string
+
+    new(baseUrl: string)
+        self.baseUrl = baseUrl
+    end
+
+    async function get(path: string): table
+        return await httpGet(self.baseUrl .. path)
+    end
+end
+```
+
+**Lua output:**
+
+```lua
+local Api = {}
+Api.__index = Api
+
+function Api.new(baseUrl)
+    local self = setmetatable({}, Api)
+    Api._init(self, baseUrl)
+    return self
+end
+
+function Api._init(self, baseUrl)
+    self.baseUrl = baseUrl
+end
+
+function Api:get(path)
+    return __luao_async(function()
+        return __luao_await(httpGet(self.baseUrl .. path))
+    end)
+end
+```
+
 ---
 
-## 19. Runtime Library
+## 21. Runtime Library
 
 Luao requires a small runtime library that is emitted (or required) at the top of transpiled files when the corresponding features are used. The runtime functions are prefixed with `__luao_` to avoid collisions.
 
@@ -1970,6 +2395,95 @@ end
   - Supports `pairs()` iteration via `__pairs`.
   - Returns a descriptive string via `__tostring`.
 
+### `__luao_async(fn)`
+
+Creates a Task from a function. The function's body may call `__luao_await` to suspend until an awaited value resolves.
+
+```lua
+function __luao_async(fn)
+    local task = {
+        _callbacks = {},
+        _status = "pending",
+    }
+    task._co = coroutine.create(fn)
+    local function finish(ok, result)
+        if ok then
+            task._status = "resolved"
+            task._result = result
+        else
+            task._status = "rejected"
+            task._error = result
+        end
+        for i = 1, #task._callbacks do
+            task._callbacks[i](task._result, task._error)
+        end
+    end
+    local function step(value)
+        local ok, yielded = coroutine.resume(task._co, value)
+        if not ok then
+            finish(false, yielded)
+            return
+        end
+        if coroutine.status(task._co) == "dead" then
+            finish(true, yielded)
+        elseif type(yielded) == "table" and yielded._status ~= nil then
+            if yielded._status ~= "pending" then
+                step(yielded._result)
+            else
+                yielded:andThen(function(result, err)
+                    if err then finish(false, err) else step(result) end
+                end)
+            end
+        else
+            step(yielded)
+        end
+    end
+    function task:andThen(cb)
+        if self._status ~= "pending" then
+            cb(self._result, self._error)
+        else
+            self._callbacks[#self._callbacks + 1] = cb
+        end
+        return self
+    end
+    function task:await()
+        while self._status == "pending" do
+            coroutine.yield()
+        end
+        if self._error then error(self._error) end
+        return self._result
+    end
+    step()
+    return task
+end
+```
+
+**Behavior:**
+
+- Creates a coroutine from `fn` and wraps it in a Task object.
+- Auto-starts execution immediately. If `fn` completes synchronously (no awaits), the task resolves before `__luao_async` returns.
+- When the coroutine yields (via `__luao_await`), the yielded value is inspected:
+  - If it is a Task (has a `_status` field), the current task chains onto it via `andThen`.
+  - If it is a plain value, the coroutine is resumed immediately with that value.
+- On completion, all registered `andThen` callbacks are invoked with `(result, nil)` for success or `(nil, error)` for failure.
+- `task:await()` is a blocking wait using coroutine yields, suitable for use inside other coroutines.
+
+### `__luao_await(value)`
+
+Yields the current coroutine, passing `value` to the Task scheduler.
+
+```lua
+function __luao_await(value)
+    return coroutine.yield(value)
+end
+```
+
+**Behavior:**
+
+- Suspends the current async function's coroutine.
+- The Task scheduler (in `__luao_async`) inspects the yielded value and determines how to resume.
+- When the awaited value resolves, the coroutine is resumed with the result.
+
 ### Runtime Inclusion Strategy
 
 The runtime functions are included in transpiled output using one of two strategies, selected by the transpiler configuration:
@@ -2004,6 +2518,10 @@ Luao adds the following contextual keywords to Lua 5.4. These words are reserved
 | `set`         | Property setter                      |
 | `static`      | Static member modifier               |
 | `super`       | Parent class reference               |
+| `async`       | Async function modifier              |
+| `await`       | Async suspension expression          |
+| `yield`       | Generator value production           |
+| `generator`   | Generator function modifier          |
 
 ## Appendix B: Compilation Errors
 
@@ -2031,6 +2549,8 @@ The following is a non-exhaustive list of compile-time errors specific to Luao f
 | E018   | Type mismatch: expected `X`, found `Y`                                   |
 | E019   | `instanceof` right-hand side must be a class name                        |
 | E020   | Cannot declare more than one constructor per class                       |
+| E021   | `yield` used outside of a generator function                             |
+| E022   | `await` used outside of an async function                                |
 
 ## Appendix C: Compatibility Notes
 
