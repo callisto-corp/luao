@@ -1,0 +1,142 @@
+-- ============================================================
+-- Test file: every line here should trigger a checker error
+-- ============================================================
+
+-- E003: Class with abstract methods must be declared abstract
+class NotAbstractButHasAbstract
+    abstract function doStuff(): void
+end
+
+-- E013: Duplicate enum entry
+enum DuplicateEnum
+    Foo = 1
+    Bar = 2
+    Foo = 3
+end
+
+-- E014: Mixed string and numeric enum values
+enum MixedEnum
+    A = 1
+    B = "hello"
+end
+
+-- E015: Static method references self
+class StaticSelfUser
+    static function bad(): number
+        return self.x
+    end
+end
+
+-- E016: Constructor returns value
+class ReturnsInCtor
+    new()
+        return 42
+    end
+end
+
+-- E017: Duplicate class member
+class DupMembers
+    public x: number
+    public x: string
+end
+
+-- E020: Multiple constructors
+class TwoCtors
+    new()
+    end
+    new(x: number)
+    end
+end
+
+-- E018: Type mismatch — assign string to number variable
+local myNum: number = "not a number"
+
+-- E018: Type mismatch — arithmetic on string
+local badArith: number = "hello" + 5
+
+-- E018: Type mismatch — concat boolean
+local badConcat: string = true .. "x"
+
+-- E018: Bitwise on string
+local badBit: number = "x" & 5
+
+-- E018: Unary minus on string
+local badNeg: number = -"oops"
+
+-- E018: Length on number
+local badLen: number = #42
+
+-- Abstract class for testing
+abstract class Shape
+    abstract function area(): number
+end
+
+-- E001: Instantiate abstract class
+local s = new Shape()
+
+-- E002: Non-abstract class doesn't implement abstract methods
+class BadShape extends Shape
+end
+
+-- E011: Readonly field assignment outside constructor
+class ReadonlyViolation
+    readonly id: number
+
+    new(id: number)
+        self.id = id
+    end
+
+    public function resetId(newId: number): void
+        self.id = newId
+    end
+end
+
+-- E009: Private access from outside
+class SecretKeeper
+    private secret: string
+    new()
+        self.secret = "hidden"
+    end
+end
+
+local sk = new SecretKeeper()
+local exposed = sk.secret
+
+-- E019: instanceof with non-class
+local x = sk instanceof NotAClass
+
+-- E007: override without parent method
+class Base
+    public function foo(): void
+    end
+end
+
+class Child extends Base
+    override function nonexistent(): void
+    end
+end
+
+-- Interface conformance
+interface Greetable
+    function greet(): string
+    name: string
+end
+
+-- E012: Missing interface method and field
+class Rude implements Greetable
+end
+
+-- E018: Return type mismatch
+function wrongReturn(): number
+    return "hello"
+end
+
+-- E018: Method argument type mismatch
+class Calculator
+    public function add(a: number, b: number): number
+        return a + b
+    end
+end
+
+local calc = new Calculator()
+calc:add("one", "two")

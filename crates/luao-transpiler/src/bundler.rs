@@ -201,6 +201,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
         stmt_idx: usize,
         needs_instanceof: bool,
         needs_enum_freeze: bool,
+        needs_abstract_guard: bool,
     }
 
     let mut items: Vec<EmittedItem> = Vec::new();
@@ -282,6 +283,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
             let code = std::mem::take(&mut emitter.output);
             let needs_instanceof = emitter.needs_instanceof;
             let needs_enum_freeze = emitter.needs_enum_freeze;
+            let needs_abstract_guard = emitter.needs_abstract_guard;
             // Carry forward type info only for exported names
             let exported_set: std::collections::HashSet<&str> = module.exports.iter().map(|s| s.as_str()).collect();
             for name in &defines {
@@ -305,6 +307,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
                 stmt_idx,
                 needs_instanceof,
                 needs_enum_freeze,
+                needs_abstract_guard,
             });
         }
     }
@@ -370,9 +373,11 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
     // Phase 8: Assemble the bundle
     let mut runtime_needs_instanceof = false;
     let mut runtime_needs_enum_freeze = false;
+    let mut runtime_needs_abstract_guard = false;
     for &idx in &ordered {
         if items[idx].needs_instanceof { runtime_needs_instanceof = true; }
         if items[idx].needs_enum_freeze { runtime_needs_enum_freeze = true; }
+        if items[idx].needs_abstract_guard { runtime_needs_abstract_guard = true; }
     }
 
     let mut bundle = String::new();
@@ -383,6 +388,10 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
     }
     if runtime_needs_enum_freeze {
         bundle.push_str(crate::runtime::ENUM_FREEZE_FN);
+        bundle.push_str("\n\n");
+    }
+    if runtime_needs_abstract_guard {
+        bundle.push_str(crate::runtime::ABSTRACT_GUARD_FN);
         bundle.push_str("\n\n");
     }
 

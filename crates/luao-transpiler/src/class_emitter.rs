@@ -73,32 +73,37 @@ fn emit_constructor(
     let params = emitter.emit_params(&ctor.params);
     let new_name = if class.is_extern { "new".to_string() } else { emitter.mangle_shared("new") };
 
+    // Emit the public .new() function that creates self and calls _init
     emitter.writeln(&format!("function {}.{}({})", class_name, new_name, params));
     emitter.indent();
+    emitter.writeln(&format!("local self = setmetatable({{}}, {})", class_name));
 
     if class.is_abstract {
         emitter.writeln(&format!(
-            "error(\"Cannot instantiate abstract class {}\")",
-            class_name
+            "__luao_abstract_guard(self, {}, \"{}\")",
+            class_name, class_name
         ));
+        emitter.needs_abstract_guard = true;
     }
 
-    let has_super_call = parent_name.is_some()
-        && ctor.body.statements.iter().any(|s| is_super_new_call(s));
-
-    if !has_super_call {
-        if let Some(parent) = parent_name {
-            let parent_new = if is_parent_extern(emitter, parent_name) {
-                "new".to_string()
-            } else {
-                emitter.mangle_shared("new")
-            };
-            emitter.writeln(&format!("local self = {}.{}()", parent, parent_new));
-            emitter.writeln(&format!("setmetatable(self, {})", class_name));
-        } else {
-            emitter.writeln(&format!("local self = setmetatable({{}}, {})", class_name));
-        }
+    // Call _init with self and all params
+    if params.is_empty() {
+        emitter.writeln(&format!("{}._init(self)", class_name));
+    } else {
+        emitter.writeln(&format!("{}._init(self, {})", class_name, params));
     }
+    emitter.writeln("return self");
+    emitter.dedent();
+    emitter.writeln("end");
+    emitter.newline();
+
+    // Emit the _init function that takes self as first param
+    if params.is_empty() {
+        emitter.writeln(&format!("function {}._init(self)", class_name));
+    } else {
+        emitter.writeln(&format!("function {}._init(self, {})", class_name, params));
+    }
+    emitter.indent();
 
     emit_default_fields(emitter, class);
 
@@ -122,7 +127,6 @@ fn emit_constructor(
     }
 
     emitter.local_var_types = saved_var_types;
-    emitter.writeln("return self");
     emitter.dedent();
     emitter.writeln("end");
     emitter.newline();
@@ -138,23 +142,19 @@ fn emit_default_constructor(
     emitter.writeln(&format!("function {}.{}()", class_name, new_name));
     emitter.indent();
 
+    emitter.writeln(&format!("local self = setmetatable({{}}, {})", class_name));
+
     if class.is_abstract {
         emitter.writeln(&format!(
-            "error(\"Cannot instantiate abstract class {}\")",
-            class_name
+            "__luao_abstract_guard(self, {}, \"{}\")",
+            class_name, class_name
         ));
+        emitter.needs_abstract_guard = true;
     }
 
     if let Some(parent) = parent_name {
-        let parent_new = if is_parent_extern(emitter, parent_name) {
-            "new".to_string()
-        } else {
-            emitter.mangle_shared("new")
-        };
-        emitter.writeln(&format!("local self = {}.{}()", parent, parent_new));
-        emitter.writeln(&format!("setmetatable(self, {})", class_name));
-    } else {
-        emitter.writeln(&format!("local self = setmetatable({{}}, {})", class_name));
+        // Call parent _init to initialize parent fields
+        emitter.writeln(&format!("{}._init(self)", parent));
     }
 
     emit_default_fields(emitter, class);
@@ -190,17 +190,6 @@ fn is_parent_extern(emitter: &Emitter, parent_name: &Option<String>) -> bool {
     false
 }
 
-fn is_super_new_call(stmt: &luao_parser::Statement) -> bool {
-    if let luao_parser::Statement::ExpressionStatement(expr) = stmt {
-        if let Expression::FunctionCall(call) = expr {
-            if let Expression::SuperAccess(sa) = &call.callee {
-                return sa.method.name.as_str() == "new";
-            }
-        }
-    }
-    false
-}
-
 fn emit_constructor_statement(
     emitter: &mut Emitter,
     stmt: &luao_parser::Statement,
@@ -218,13 +207,12 @@ fn emit_constructor_statement(
                             .map(|a| emit_expression(emitter, a))
                             .collect::<Vec<_>>()
                             .join(", ");
-                        let parent_new = if is_parent_extern(emitter, parent_name) {
-                            "new".to_string()
+                        // Call parent _init with self to initialize parent fields
+                        if args.is_empty() {
+                            emitter.writeln(&format!("{}._init(self)", parent));
                         } else {
-                            emitter.mangle_shared("new")
-                        };
-                        emitter.writeln(&format!("local self = {}.{}({})", parent, parent_new, args));
-                        emitter.writeln(&format!("setmetatable(self, {})", class_name));
+                            emitter.writeln(&format!("{}._init(self, {})", parent, args));
+                        }
                         return;
                     }
                 }

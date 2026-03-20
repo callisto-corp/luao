@@ -15,6 +15,7 @@ pub struct Emitter {
     pub(crate) symbol_table: SymbolTable,
     pub(crate) needs_instanceof: bool,
     pub(crate) needs_enum_freeze: bool,
+    pub(crate) needs_abstract_guard: bool,
     pub(crate) current_class: Option<String>,
     pub(crate) current_class_parent: Option<String>,
     pub(crate) mangler: Option<Mangler>,
@@ -50,6 +51,7 @@ impl Emitter {
             symbol_table,
             needs_instanceof: false,
             needs_enum_freeze: false,
+            needs_abstract_guard: false,
             current_class: None,
             current_class_parent: None,
             mangler,
@@ -80,6 +82,11 @@ impl Emitter {
         }
         if self.needs_enum_freeze {
             preamble.push_str(runtime::ENUM_FREEZE_FN);
+            preamble.push('\n');
+            preamble.push('\n');
+        }
+        if self.needs_abstract_guard {
+            preamble.push_str(runtime::ABSTRACT_GUARD_FN);
             preamble.push('\n');
             preamble.push('\n');
         }
