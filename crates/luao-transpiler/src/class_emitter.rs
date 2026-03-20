@@ -281,6 +281,10 @@ fn emit_method(
         ));
     }
 
+    if method.is_async {
+        emitter.needs_async = true;
+    }
+
     if let Some(ref body) = method.body {
         let saved_parent = emitter.current_class_parent.clone();
         let saved_var_types = emitter.local_var_types.clone();
@@ -297,7 +301,18 @@ fn emit_method(
                 }
             }
         }
-        emitter.emit_block(body);
+
+        if method.is_generator || method.is_async {
+            let wrapper = if method.is_async { "__luao_async" } else { "coroutine.wrap" };
+            emitter.indent();
+            emitter.writeln(&format!("return {}(function()", wrapper));
+            emitter.emit_block(body);
+            emitter.writeln("end)");
+            emitter.dedent();
+        } else {
+            emitter.emit_block(body);
+        }
+
         emitter.current_class_parent = saved_parent;
         emitter.local_var_types = saved_var_types;
     }

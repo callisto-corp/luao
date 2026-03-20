@@ -104,6 +104,8 @@ pub struct MethodDecl {
     pub is_abstract: bool,
     pub is_override: bool,
     pub is_extern: bool,
+    pub is_async: bool,
+    pub is_generator: bool,
     pub span: Span,
 }
 
@@ -278,6 +280,8 @@ pub struct FunctionDecl {
     pub return_type: Option<TypeAnnotation>,
     pub body: Block,
     pub is_local: bool,
+    pub is_async: bool,
+    pub is_generator: bool,
     pub span: Span,
 }
 
@@ -357,6 +361,8 @@ pub enum Expression {
     NewExpr(Box<NewExpr>),
     CastExpr(Box<CastExpr>),
     IfExpression(Box<IfExpr>),
+    YieldExpr(Box<YieldExpr>),
+    AwaitExpr(Box<AwaitExpr>),
 }
 
 impl Expression {
@@ -382,6 +388,8 @@ impl Expression {
             Expression::NewExpr(n) => n.span,
             Expression::CastExpr(c) => c.span,
             Expression::IfExpression(i) => i.span,
+            Expression::YieldExpr(y) => y.span,
+            Expression::AwaitExpr(a) => a.span,
         }
     }
 }
@@ -468,6 +476,8 @@ pub struct FunctionExpr {
     pub params: Vec<Parameter>,
     pub return_type: Option<TypeAnnotation>,
     pub body: Block,
+    pub is_async: bool,
+    pub is_generator: bool,
     pub span: Span,
 }
 
@@ -517,5 +527,17 @@ pub struct IfExpr {
     pub then_expr: Expression,
     pub elseif_clauses: Vec<(Expression, Expression)>,
     pub else_expr: Expression,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct YieldExpr {
+    pub value: Option<Expression>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct AwaitExpr {
+    pub expr: Expression,
     pub span: Span,
 }

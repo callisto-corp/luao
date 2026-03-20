@@ -16,6 +16,7 @@ pub struct Emitter {
     pub(crate) needs_instanceof: bool,
     pub(crate) needs_enum_freeze: bool,
     pub(crate) needs_abstract_guard: bool,
+    pub(crate) needs_async: bool,
     pub(crate) current_class: Option<String>,
     pub(crate) current_class_parent: Option<String>,
     pub(crate) mangler: Option<Mangler>,
@@ -52,6 +53,7 @@ impl Emitter {
             needs_instanceof: false,
             needs_enum_freeze: false,
             needs_abstract_guard: false,
+            needs_async: false,
             current_class: None,
             current_class_parent: None,
             mangler,
@@ -87,6 +89,11 @@ impl Emitter {
         }
         if self.needs_abstract_guard {
             preamble.push_str(runtime::ABSTRACT_GUARD_FN);
+            preamble.push('\n');
+            preamble.push('\n');
+        }
+        if self.needs_async {
+            preamble.push_str(runtime::ASYNC_RUNTIME);
             preamble.push('\n');
             preamble.push('\n');
         }

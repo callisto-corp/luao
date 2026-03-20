@@ -43,6 +43,8 @@ pub struct MethodSymbol {
     pub is_abstract: bool,
     pub is_override: bool,
     pub is_extern: bool,
+    pub is_async: bool,
+    pub is_generator: bool,
 }
 
 #[derive(Debug, Clone)]

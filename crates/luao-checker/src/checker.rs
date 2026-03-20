@@ -74,6 +74,12 @@ impl<'a> Checker<'a> {
         // Import shadowing
         diagnostics.extend(rules::check_import_shadowing(file, self.symbol_table));
 
+        // E021: yield outside generator function
+        diagnostics.extend(rules::check_yield_outside_generator(file, self.symbol_table));
+
+        // E022: await outside async function
+        diagnostics.extend(rules::check_await_outside_async(file, self.symbol_table));
+
         diagnostics
     }
 }

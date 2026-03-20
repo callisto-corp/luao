@@ -1,0 +1,139 @@
+-- =============================================================================
+-- Luao Generators, Async/Await, and Iterators Demo
+-- =============================================================================
+
+-- 1. Basic generator function
+generator function countdown(n: number): number
+    while n > 0 do
+        yield n
+        n = n - 1
+    end
+end
+
+print("=== Countdown ===")
+for v in countdown(5) do
+    print(v)
+end
+
+-- 2. Generator with explicit nil yield
+generator function signals(): number
+    yield 1
+    yield nil
+    yield 3
+end
+
+print("\n=== Signals ===")
+for v in signals() do
+    print(tostring(v))
+end
+
+-- 3. Infinite generator (use with care)
+generator function naturals(): number
+    local n = 1
+    while true do
+        yield n
+        n = n + 1
+    end
+end
+
+print("\n=== First 5 naturals ===")
+local count = 0
+for v in naturals() do
+    print(v)
+    count = count + 1
+    if count >= 5 then break end
+end
+
+-- 4. Generator class method
+class FibSequence
+    private limit: number
+
+    new(limit: number)
+        self.limit = limit
+    end
+
+    generator function iter(): number
+        local a = 0
+        local b = 1
+        while a <= self.limit do
+            yield a
+            local next = a + b
+            a = b
+            b = next
+        end
+    end
+end
+
+print("\n=== Fibonacci up to 50 ===")
+local fib = FibSequence.new(50)
+for v in fib:iter() do
+    print(v)
+end
+
+-- 5. Local generator function
+local generator function squares(n: number): number
+    for i = 1, n do
+        yield i * i
+    end
+end
+
+print("\n=== Squares ===")
+for v in squares(5) do
+    print(v)
+end
+
+-- 6. Async function - synchronous resolve
+async function compute(x: number): number
+    return x * x + 1
+end
+
+print("\n=== Async compute ===")
+local task = compute(5)
+task:andThen(function(result, err)
+    print("compute(5) = " .. tostring(result))
+end)
+
+-- 7. Async with await
+async function fetchAndDouble(x: number): number
+    local val = await compute(x)
+    return val * 2
+end
+
+print("\n=== Async fetch and double ===")
+local task2 = fetchAndDouble(3)
+task2:andThen(function(result, err)
+    print("fetchAndDouble(3) = " .. tostring(result))
+end)
+
+-- 8. Generator expression (anonymous)
+local gen = generator function(n: number): number
+    for i = 1, n do
+        yield i * 10
+    end
+end
+
+print("\n=== Anonymous generator ===")
+for v in gen(3) do
+    print(v)
+end
+
+-- 9. Async class method
+class DataService
+    private multiplier: number
+
+    new(multiplier: number)
+        self.multiplier = multiplier
+    end
+
+    async function process(x: number): number
+        local base = await compute(x)
+        return base * self.multiplier
+    end
+end
+
+print("\n=== Async class method ===")
+local svc = DataService.new(10)
+local task3 = svc:process(4)
+task3:andThen(function(result, err)
+    print("svc:process(4) = " .. tostring(result))
+end)

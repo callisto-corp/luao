@@ -122,8 +122,30 @@ impl Parser {
             TokenKind::Interface if self.peek_ahead(1).kind == TokenKind::Identifier || self.peek_ahead(1).kind.is_contextual_keyword() => self.parse_interface_decl_with_extern(false),
             TokenKind::Enum => self.parse_enum_decl_with_extern(false),
             TokenKind::Import if self.peek_ahead(1).kind == TokenKind::Identifier || self.peek_ahead(1).kind.is_contextual_keyword() => self.parse_import_decl(),
-            TokenKind::Export if matches!(self.peek_ahead(1).kind, TokenKind::Local | TokenKind::Function | TokenKind::Class | TokenKind::Abstract | TokenKind::Sealed | TokenKind::Extern | TokenKind::Enum | TokenKind::Interface | TokenKind::Type) => self.parse_export_decl(),
+            TokenKind::Export if matches!(self.peek_ahead(1).kind, TokenKind::Local | TokenKind::Function | TokenKind::Class | TokenKind::Abstract | TokenKind::Sealed | TokenKind::Extern | TokenKind::Enum | TokenKind::Interface | TokenKind::Type | TokenKind::Async | TokenKind::Generator) => self.parse_export_decl(),
             TokenKind::Local => self.parse_local(),
+            // async function / async generator function
+            TokenKind::Async if self.peek_ahead(1).kind == TokenKind::Function
+                || (self.peek_ahead(1).kind == TokenKind::Generator && self.peek_ahead(2).kind == TokenKind::Function) => {
+                self.advance(); // consume 'async'
+                let is_generator = self.check(TokenKind::Generator);
+                if is_generator { self.advance(); } // consume 'generator'
+                let mut stmt = self.parse_function_decl(false)?;
+                if let Statement::FunctionDecl(ref mut fd) = stmt {
+                    fd.is_async = true;
+                    fd.is_generator = is_generator;
+                }
+                Ok(stmt)
+            }
+            // generator function
+            TokenKind::Generator if self.peek_ahead(1).kind == TokenKind::Function => {
+                self.advance(); // consume 'generator'
+                let mut stmt = self.parse_function_decl(false)?;
+                if let Statement::FunctionDecl(ref mut fd) = stmt {
+                    fd.is_generator = true;
+                }
+                Ok(stmt)
+            }
             TokenKind::Function => self.parse_function_decl(false),
             TokenKind::If => self.parse_if_statement(),
             TokenKind::While => self.parse_while_statement(),
@@ -213,6 +235,8 @@ impl Parser {
         let mut is_override = false;
         let mut is_readonly = false;
         let mut is_extern = false;
+        let mut is_async = false;
+        let mut is_generator = false;
 
         loop {
             match self.current().kind {
@@ -248,6 +272,14 @@ impl Parser {
                     is_extern = true;
                     self.advance();
                 }
+                TokenKind::Async => {
+                    is_async = true;
+                    self.advance();
+                }
+                TokenKind::Generator => {
+                    is_generator = true;
+                    self.advance();
+                }
                 _ => break,
             }
         }
@@ -271,7 +303,12 @@ impl Parser {
         }
 
         if self.check(TokenKind::Function) {
-            return self.parse_method(access, is_static, is_abstract, is_override, is_extern);
+            let mut member = self.parse_method(access, is_static, is_abstract, is_override, is_extern)?;
+            if let ClassMember::Method(ref mut m) = member {
+                m.is_async = is_async;
+                m.is_generator = is_generator;
+            }
+            return Ok(member);
         }
 
         self.parse_field(access, is_static, is_readonly, is_extern)
@@ -345,6 +382,8 @@ impl Parser {
             is_abstract,
             is_override,
             is_extern,
+            is_async: false,
+            is_generator: false,
             span: start.merge(end),
         }))
     }
@@ -606,6 +645,26 @@ impl Parser {
             TokenKind::Enum => self.parse_enum_decl_with_extern(false)?,
             TokenKind::Interface => self.parse_interface_decl_with_extern(false)?,
             TokenKind::Type => self.parse_type_alias()?,
+            TokenKind::Async if self.peek_ahead(1).kind == TokenKind::Function
+                || (self.peek_ahead(1).kind == TokenKind::Generator && self.peek_ahead(2).kind == TokenKind::Function) => {
+                self.advance(); // consume 'async'
+                let is_generator = self.check(TokenKind::Generator);
+                if is_generator { self.advance(); }
+                let mut stmt = self.parse_function_decl(false)?;
+                if let Statement::FunctionDecl(ref mut fd) = stmt {
+                    fd.is_async = true;
+                    fd.is_generator = is_generator;
+                }
+                stmt
+            }
+            TokenKind::Generator if self.peek_ahead(1).kind == TokenKind::Function => {
+                self.advance(); // consume 'generator'
+                let mut stmt = self.parse_function_decl(false)?;
+                if let Statement::FunctionDecl(ref mut fd) = stmt {
+                    fd.is_generator = true;
+                }
+                stmt
+            }
             _ => {
                 return Err(self.error(
                     "expected declaration after 'export'",
@@ -803,6 +862,30 @@ impl Parser {
         let start = self.current_span();
         self.expect(TokenKind::Local)?;
 
+        // local async function / local async generator function
+        if self.check(TokenKind::Async) && (self.peek_ahead(1).kind == TokenKind::Function
+            || (self.peek_ahead(1).kind == TokenKind::Generator && self.peek_ahead(2).kind == TokenKind::Function)) {
+            self.advance(); // consume 'async'
+            let is_generator = self.check(TokenKind::Generator);
+            if is_generator { self.advance(); }
+            let mut stmt = self.parse_function_decl(true)?;
+            if let Statement::FunctionDecl(ref mut fd) = stmt {
+                fd.is_async = true;
+                fd.is_generator = is_generator;
+            }
+            return Ok(stmt);
+        }
+
+        // local generator function
+        if self.check(TokenKind::Generator) && self.peek_ahead(1).kind == TokenKind::Function {
+            self.advance(); // consume 'generator'
+            let mut stmt = self.parse_function_decl(true)?;
+            if let Statement::FunctionDecl(ref mut fd) = stmt {
+                fd.is_generator = true;
+            }
+            return Ok(stmt);
+        }
+
         if self.check(TokenKind::Function) {
             return self.parse_function_decl(true);
         }
@@ -881,6 +964,8 @@ impl Parser {
             return_type,
             body,
             is_local,
+            is_async: false,
+            is_generator: false,
             span: start.merge(end),
         }))
     }
@@ -1561,6 +1646,8 @@ impl Parser {
                     params,
                     return_type,
                     body,
+                    is_async: false,
+                    is_generator: false,
                     span: start.merge(end),
                 })))
             }
@@ -1624,6 +1711,83 @@ impl Parser {
                     then_expr,
                     elseif_clauses,
                     else_expr,
+                    span: start.merge(end),
+                })))
+            }
+            TokenKind::Yield => {
+                let start = self.current_span();
+                self.advance();
+                // yield can have an optional value — check if next token can start an expression
+                let value = if self.can_start_expression() {
+                    Some(self.parse_expression()?)
+                } else {
+                    None
+                };
+                let end = self.previous_span();
+                Ok(Expression::YieldExpr(Box::new(YieldExpr {
+                    value,
+                    span: start.merge(end),
+                })))
+            }
+            TokenKind::Await => {
+                let start = self.current_span();
+                self.advance();
+                let expr = self.parse_expression()?;
+                let end = self.previous_span();
+                Ok(Expression::AwaitExpr(Box::new(AwaitExpr {
+                    expr,
+                    span: start.merge(end),
+                })))
+            }
+            TokenKind::Async if self.peek_ahead(1).kind == TokenKind::Function => {
+                let start = self.current_span();
+                self.advance(); // consume 'async'
+                let is_gen = self.check(TokenKind::Generator);
+                if is_gen { self.advance(); }
+                self.advance(); // consume 'function'
+                self.expect(TokenKind::LeftParen)?;
+                let params = self.parse_param_list()?;
+                self.expect(TokenKind::RightParen)?;
+                let return_type = if self.check(TokenKind::Colon) {
+                    self.advance();
+                    Some(self.parse_type_annotation()?)
+                } else {
+                    None
+                };
+                let body = self.parse_block()?;
+                self.expect(TokenKind::End)?;
+                let end = self.previous_span();
+                Ok(Expression::FunctionExpr(Box::new(FunctionExpr {
+                    params,
+                    return_type,
+                    body,
+                    is_async: true,
+                    is_generator: is_gen,
+                    span: start.merge(end),
+                })))
+            }
+            TokenKind::Generator if self.peek_ahead(1).kind == TokenKind::Function => {
+                let start = self.current_span();
+                self.advance(); // consume 'generator'
+                self.advance(); // consume 'function'
+                self.expect(TokenKind::LeftParen)?;
+                let params = self.parse_param_list()?;
+                self.expect(TokenKind::RightParen)?;
+                let return_type = if self.check(TokenKind::Colon) {
+                    self.advance();
+                    Some(self.parse_type_annotation()?)
+                } else {
+                    None
+                };
+                let body = self.parse_block()?;
+                self.expect(TokenKind::End)?;
+                let end = self.previous_span();
+                Ok(Expression::FunctionExpr(Box::new(FunctionExpr {
+                    params,
+                    return_type,
+                    body,
+                    is_async: false,
+                    is_generator: true,
                     span: start.merge(end),
                 })))
             }
@@ -1982,6 +2146,38 @@ impl Parser {
 
     fn is_at_end(&self) -> bool {
         self.current().kind == TokenKind::Eof
+    }
+
+    /// Check if the current token can start an expression (used for optional yield value).
+    fn can_start_expression(&self) -> bool {
+        matches!(
+            self.current().kind,
+            TokenKind::Identifier
+                | TokenKind::Number
+                | TokenKind::StringLiteral
+                | TokenKind::LeftParen
+                | TokenKind::Minus
+                | TokenKind::Not
+                | TokenKind::Hash
+                | TokenKind::Tilde
+                | TokenKind::LeftBrace
+                | TokenKind::Function
+                | TokenKind::True
+                | TokenKind::False
+                | TokenKind::Nil
+                | TokenKind::DotDotDot
+                | TokenKind::Super
+                | TokenKind::New
+                | TokenKind::If
+                | TokenKind::Await
+                | TokenKind::Yield
+                | TokenKind::Async
+                | TokenKind::Generator
+        ) || (self.current().kind.is_contextual_keyword()
+            && !matches!(
+                self.current().kind,
+                TokenKind::End | TokenKind::Else | TokenKind::ElseIf | TokenKind::Until
+            ))
     }
 
     fn expect(&mut self, kind: TokenKind) -> ParseResult<&Token> {

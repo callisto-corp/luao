@@ -122,12 +122,27 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
             let saved_var_types = emitter.local_var_types.clone();
             // Track parameter types
             track_param_types(emitter, &fd.params);
+
+            if fd.is_async {
+                emitter.needs_async = true;
+            }
+
             if fd.is_local && !emitter.is_exported(&name) {
                 emitter.writeln(&format!("local function {}({})", name, params));
             } else {
                 emitter.writeln(&format!("function {}({})", name, params));
             }
-            emitter.emit_block(&fd.body);
+
+            if fd.is_generator || fd.is_async {
+                let wrapper = if fd.is_async { "__luao_async" } else { "coroutine.wrap" };
+                emitter.indent();
+                emitter.writeln(&format!("return {}(function()", wrapper));
+                emitter.emit_block(&fd.body);
+                emitter.writeln("end)");
+                emitter.dedent();
+            } else {
+                emitter.emit_block(&fd.body);
+            }
             emitter.writeln("end");
             emitter.local_var_types = saved_var_types;
         }

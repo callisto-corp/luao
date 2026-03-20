@@ -105,6 +105,8 @@ impl Resolver {
                         is_abstract: m.is_abstract,
                         is_override: m.is_override,
                         is_extern: m.is_extern || decl.is_extern,
+                        is_async: m.is_async,
+                        is_generator: m.is_generator,
                     });
                 }
                 ClassMember::Constructor(c) => {
@@ -129,6 +131,8 @@ impl Resolver {
                         is_abstract: false,
                         is_override: false,
                         is_extern: false,
+                        is_async: false,
+                        is_generator: false,
                     });
                 }
                 ClassMember::Property(_) => {}
@@ -197,6 +201,8 @@ impl Resolver {
                         is_abstract: true,
                         is_override: false,
                         is_extern: m.is_extern || decl.is_extern,
+                        is_async: false,
+                        is_generator: false,
                     });
                 }
                 luao_parser::InterfaceMember::Field(f) => {

@@ -1,0 +1,70 @@
+-- Generator function
+generator function range(start: number, stop: number): number
+    for i = start, stop do
+        yield i
+    end
+end
+
+-- Use generator in for loop
+for v in range(1, 5) do
+    print(v)
+end
+
+-- Generator class method
+class NumberRange
+    private start: number
+    private stop: number
+
+    new(start: number, stop: number)
+        self.start = start
+        self.stop = stop
+    end
+
+    generator function values(): number
+        for i = self.start, self.stop do
+            yield i
+        end
+    end
+
+    generator function evens(): number
+        for i = self.start, self.stop do
+            if i % 2 == 0 then
+                yield i
+            end
+        end
+    end
+end
+
+local r = NumberRange.new(1, 10)
+for v in r:values() do
+    print("value: " .. v)
+end
+for v in r:evens() do
+    print("even: " .. v)
+end
+
+-- Fibonacci generator
+generator function fibonacci(limit: number): number
+    local a = 0
+    local b = 1
+    while a <= limit do
+        yield a
+        local next = a + b
+        a = b
+        b = next
+    end
+end
+
+for fib in fibonacci(100) do
+    print("fib: " .. fib)
+end
+
+-- Async function
+async function delayedValue(x: number): number
+    return x * 2
+end
+
+local task = delayedValue(21)
+task:andThen(function(result, err)
+    print("async result: " .. result)
+end)

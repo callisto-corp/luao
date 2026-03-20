@@ -83,15 +83,41 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
                     }
                 }
             }
-            let mut result = format!("function({})\n", params);
-            let saved_output = std::mem::take(&mut emitter.output);
-            emitter.emit_block(&fe.body);
-            let body = std::mem::replace(&mut emitter.output, saved_output);
-            result.push_str(&body);
-            emitter.write_indent();
-            result.push_str("end");
-            emitter.local_var_types = saved_var_types;
-            result
+
+            if fe.is_async {
+                emitter.needs_async = true;
+            }
+
+            if fe.is_generator || fe.is_async {
+                let wrapper = if fe.is_async {
+                    "__luao_async"
+                } else {
+                    "coroutine.wrap"
+                };
+                let mut result = format!("function({})\n", params);
+                let saved_output = std::mem::take(&mut emitter.output);
+                emitter.indent();
+                emitter.writeln(&format!("return {}(function()", wrapper));
+                emitter.emit_block(&fe.body);
+                emitter.writeln("end)");
+                emitter.dedent();
+                let body = std::mem::replace(&mut emitter.output, saved_output);
+                result.push_str(&body);
+                emitter.write_indent();
+                result.push_str("end");
+                emitter.local_var_types = saved_var_types;
+                result
+            } else {
+                let mut result = format!("function({})\n", params);
+                let saved_output = std::mem::take(&mut emitter.output);
+                emitter.emit_block(&fe.body);
+                let body = std::mem::replace(&mut emitter.output, saved_output);
+                result.push_str(&body);
+                emitter.write_indent();
+                result.push_str("end");
+                emitter.local_var_types = saved_var_types;
+                result
+            }
         }
         Expression::TableConstructor(tc) => {
             if tc.fields.is_empty() {
@@ -160,6 +186,19 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
         Expression::CastExpr(cast) => {
             // Cast is erased at compile time — just emit the inner expression
             emit_expression(emitter, &cast.expr)
+        }
+        Expression::YieldExpr(ye) => {
+            if let Some(ref val) = ye.value {
+                let v = emit_expression(emitter, val);
+                format!("coroutine.yield({})", v)
+            } else {
+                "coroutine.yield()".to_string()
+            }
+        }
+        Expression::AwaitExpr(ae) => {
+            emitter.needs_async = true;
+            let expr = emit_expression(emitter, &ae.expr);
+            format!("__luao_await({})", expr)
         }
         Expression::IfExpression(ie) => {
             // Luau if-expression → Lua ternary idiom using `and`/`or` for simple cases,

@@ -57,6 +57,10 @@ pub enum TokenKind {
     Import,
     Export,
     From,
+    Async,
+    Await,
+    Yield,
+    Generator,
 
     Identifier,
     Number,
@@ -164,6 +168,10 @@ impl TokenKind {
             "import" => Some(TokenKind::Import),
             "export" => Some(TokenKind::Export),
             "from" => Some(TokenKind::From),
+            "async" => Some(TokenKind::Async),
+            "await" => Some(TokenKind::Await),
+            "yield" => Some(TokenKind::Yield),
+            "generator" => Some(TokenKind::Generator),
             _ => None,
         }
     }
@@ -197,6 +205,10 @@ impl TokenKind {
                 | TokenKind::Import
                 | TokenKind::Export
                 | TokenKind::From
+                | TokenKind::Async
+                | TokenKind::Await
+                | TokenKind::Yield
+                | TokenKind::Generator
         )
     }
 
@@ -249,6 +261,10 @@ impl TokenKind {
                 | TokenKind::Import
                 | TokenKind::Export
                 | TokenKind::From
+                | TokenKind::Async
+                | TokenKind::Await
+                | TokenKind::Yield
+                | TokenKind::Generator
         )
     }
 }
@@ -302,6 +318,10 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Import => write!(f, "import"),
             TokenKind::Export => write!(f, "export"),
             TokenKind::From => write!(f, "from"),
+            TokenKind::Async => write!(f, "async"),
+            TokenKind::Await => write!(f, "await"),
+            TokenKind::Yield => write!(f, "yield"),
+            TokenKind::Generator => write!(f, "generator"),
             TokenKind::Identifier => write!(f, "identifier"),
             TokenKind::Number => write!(f, "number"),
             TokenKind::StringLiteral => write!(f, "string"),

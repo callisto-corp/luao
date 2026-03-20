@@ -428,6 +428,8 @@ impl<'a> TypeEnv<'a> {
             }
             Expression::Vararg(_) => LuaoType::Unknown,
             Expression::SuperAccess(_) => LuaoType::Unknown,
+            Expression::YieldExpr(_) => LuaoType::Unknown,
+            Expression::AwaitExpr(ae) => self.infer_expr(&ae.expr),
         }
     }
 }
@@ -2666,6 +2668,201 @@ fn walk_expr(expr: &Expression, visitor: &mut dyn FnMut(&Expression)) {
             // Don't walk into function bodies here — handled separately
             let _ = fe;
         }
+        Expression::YieldExpr(ye) => {
+            if let Some(ref val) = ye.value {
+                walk_expr(val, visitor);
+            }
+        }
+        Expression::AwaitExpr(ae) => {
+            walk_expr(&ae.expr, visitor);
+        }
         _ => {}
+    }
+}
+
+// =============================================================================
+// E021: yield outside generator function
+// =============================================================================
+
+pub fn check_yield_outside_generator(
+    file: &SourceFile,
+    _symbols: &SymbolTable,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    // Check top-level statements (not inside any function)
+    check_yield_in_block(&file.statements, false, &mut diagnostics);
+    diagnostics
+}
+
+fn check_yield_in_block(stmts: &[Statement], in_generator: bool, diagnostics: &mut Vec<Diagnostic>) {
+    for stmt in stmts {
+        check_yield_in_stmt(stmt, in_generator, diagnostics);
+    }
+}
+
+fn check_yield_in_stmt(stmt: &Statement, in_generator: bool, diagnostics: &mut Vec<Diagnostic>) {
+    match stmt {
+        Statement::FunctionDecl(fd) => {
+            // New function scope — check body with its own is_generator
+            check_yield_in_block(&fd.body.statements, fd.is_generator, diagnostics);
+        }
+        Statement::ClassDecl(cd) => {
+            for member in &cd.members {
+                match member {
+                    ClassMember::Method(m) => {
+                        if let Some(ref body) = m.body {
+                            check_yield_in_block(&body.statements, m.is_generator, diagnostics);
+                        }
+                    }
+                    ClassMember::Constructor(c) => {
+                        check_yield_in_block(&c.body.statements, false, diagnostics);
+                    }
+                    ClassMember::Property(p) => {
+                        if let Some(ref getter) = p.getter {
+                            check_yield_in_block(&getter.statements, false, diagnostics);
+                        }
+                        if let Some((_, ref setter)) = p.setter {
+                            check_yield_in_block(&setter.statements, false, diagnostics);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Statement::ExportDecl(inner, _) => {
+            check_yield_in_stmt(inner, in_generator, diagnostics);
+        }
+        _ => {
+            // Check expressions in this statement for yield
+            check_yield_in_stmt_exprs(stmt, in_generator, diagnostics);
+            // Recurse into sub-blocks (if, while, for, etc.)
+            match stmt {
+                Statement::IfStatement(i) => {
+                    check_yield_in_block(&i.then_block.statements, in_generator, diagnostics);
+                    for (_, block) in &i.elseif_clauses {
+                        check_yield_in_block(&block.statements, in_generator, diagnostics);
+                    }
+                    if let Some(ref block) = i.else_block {
+                        check_yield_in_block(&block.statements, in_generator, diagnostics);
+                    }
+                }
+                Statement::WhileStatement(w) => check_yield_in_block(&w.body.statements, in_generator, diagnostics),
+                Statement::RepeatStatement(r) => check_yield_in_block(&r.body.statements, in_generator, diagnostics),
+                Statement::ForNumeric(f) => check_yield_in_block(&f.body.statements, in_generator, diagnostics),
+                Statement::ForGeneric(f) => check_yield_in_block(&f.body.statements, in_generator, diagnostics),
+                Statement::DoBlock(b) => check_yield_in_block(&b.statements, in_generator, diagnostics),
+                _ => {}
+            }
+        }
+    }
+}
+
+fn check_yield_in_stmt_exprs(stmt: &Statement, in_generator: bool, diagnostics: &mut Vec<Diagnostic>) {
+    walk_exprs_in_stmt(stmt, &mut |expr| {
+        check_yield_in_expr(expr, in_generator, diagnostics);
+    });
+}
+
+fn check_yield_in_expr(expr: &Expression, in_generator: bool, diagnostics: &mut Vec<Diagnostic>) {
+    if let Expression::YieldExpr(ye) = expr {
+        if !in_generator {
+            diagnostics.push(Diagnostic::error(
+                "'yield' can only be used inside a generator function".to_string(),
+                ye.span,
+                "E021",
+            ));
+        }
+    }
+    // Don't recurse into nested function expressions — they have their own scope
+}
+
+// =============================================================================
+// E022: await outside async function
+// =============================================================================
+
+pub fn check_await_outside_async(
+    file: &SourceFile,
+    _symbols: &SymbolTable,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    check_await_in_block(&file.statements, false, &mut diagnostics);
+    diagnostics
+}
+
+fn check_await_in_block(stmts: &[Statement], in_async: bool, diagnostics: &mut Vec<Diagnostic>) {
+    for stmt in stmts {
+        check_await_in_stmt(stmt, in_async, diagnostics);
+    }
+}
+
+fn check_await_in_stmt(stmt: &Statement, in_async: bool, diagnostics: &mut Vec<Diagnostic>) {
+    match stmt {
+        Statement::FunctionDecl(fd) => {
+            check_await_in_block(&fd.body.statements, fd.is_async, diagnostics);
+        }
+        Statement::ClassDecl(cd) => {
+            for member in &cd.members {
+                match member {
+                    ClassMember::Method(m) => {
+                        if let Some(ref body) = m.body {
+                            check_await_in_block(&body.statements, m.is_async, diagnostics);
+                        }
+                    }
+                    ClassMember::Constructor(c) => {
+                        check_await_in_block(&c.body.statements, false, diagnostics);
+                    }
+                    ClassMember::Property(p) => {
+                        if let Some(ref getter) = p.getter {
+                            check_await_in_block(&getter.statements, false, diagnostics);
+                        }
+                        if let Some((_, ref setter)) = p.setter {
+                            check_await_in_block(&setter.statements, false, diagnostics);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Statement::ExportDecl(inner, _) => {
+            check_await_in_stmt(inner, in_async, diagnostics);
+        }
+        _ => {
+            check_await_in_stmt_exprs(stmt, in_async, diagnostics);
+            match stmt {
+                Statement::IfStatement(i) => {
+                    check_await_in_block(&i.then_block.statements, in_async, diagnostics);
+                    for (_, block) in &i.elseif_clauses {
+                        check_await_in_block(&block.statements, in_async, diagnostics);
+                    }
+                    if let Some(ref block) = i.else_block {
+                        check_await_in_block(&block.statements, in_async, diagnostics);
+                    }
+                }
+                Statement::WhileStatement(w) => check_await_in_block(&w.body.statements, in_async, diagnostics),
+                Statement::RepeatStatement(r) => check_await_in_block(&r.body.statements, in_async, diagnostics),
+                Statement::ForNumeric(f) => check_await_in_block(&f.body.statements, in_async, diagnostics),
+                Statement::ForGeneric(f) => check_await_in_block(&f.body.statements, in_async, diagnostics),
+                Statement::DoBlock(b) => check_await_in_block(&b.statements, in_async, diagnostics),
+                _ => {}
+            }
+        }
+    }
+}
+
+fn check_await_in_stmt_exprs(stmt: &Statement, in_async: bool, diagnostics: &mut Vec<Diagnostic>) {
+    walk_exprs_in_stmt(stmt, &mut |expr| {
+        check_await_in_expr(expr, in_async, diagnostics);
+    });
+}
+
+fn check_await_in_expr(expr: &Expression, in_async: bool, diagnostics: &mut Vec<Diagnostic>) {
+    if let Expression::AwaitExpr(ae) = expr {
+        if !in_async {
+            diagnostics.push(Diagnostic::error(
+                "'await' can only be used inside an async function".to_string(),
+                ae.span,
+                "E022",
+            ));
+        }
     }
 }
