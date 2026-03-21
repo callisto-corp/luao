@@ -73,43 +73,10 @@ fn emit_constructor(
     let params = emitter.emit_params(&ctor.params);
     let new_name = if class.is_extern { "new".to_string() } else { emitter.mangle_shared("new") };
 
-    // Emit the public .new() function that creates self and calls _init
     emitter.writeln(&format!("function {}.{}({})", class_name, new_name, params));
     emitter.indent();
-    emitter.writeln(&format!("local self = setmetatable({{}}, {})", class_name));
-
-    if class.is_abstract {
-        emitter.writeln(&format!(
-            "__luao_abstract_guard(self, {}, \"{}\")",
-            class_name, class_name
-        ));
-        emitter.needs_abstract_guard = true;
-    }
-
-    // Call _init with self and all params
-    if params.is_empty() {
-        emitter.writeln(&format!("{}._init(self)", class_name));
-    } else {
-        emitter.writeln(&format!("{}._init(self, {})", class_name, params));
-    }
-    emitter.writeln("return self");
-    emitter.dedent();
-    emitter.writeln("end");
-    emitter.newline();
-
-    // Emit the _init function that takes self as first param
-    if params.is_empty() {
-        emitter.writeln(&format!("function {}._init(self)", class_name));
-    } else {
-        emitter.writeln(&format!("function {}._init(self, {})", class_name, params));
-    }
-    emitter.indent();
-
-    emit_default_fields(emitter, class);
 
     let saved_var_types = emitter.local_var_types.clone();
-
-    // Track constructor parameter types
     for param in &ctor.params {
         if param.is_vararg { continue; }
         if let Some(ref ta) = param.type_annotation {
@@ -122,14 +89,94 @@ fn emit_constructor(
         }
     }
 
-    for stmt in &ctor.body.statements {
-        emit_constructor_statement(emitter, stmt, parent_name, class_name);
+    // Find super.new() call index (if any)
+    let super_idx = ctor.body.statements.iter().position(|stmt| is_super_new_call(stmt));
+
+    if let Some(idx) = super_idx {
+        // Emit statements before super.new()
+        for stmt in &ctor.body.statements[..idx] {
+            emitter.emit_statement(stmt);
+        }
+        // super.new(args) → local self = setmetatable(Parent.new(args), Child)
+        if let Some(parent) = parent_name {
+            let super_args = extract_super_new_args(emitter, &ctor.body.statements[idx]);
+            let parent_new = emitter.mangle_shared("new");
+            if super_args.is_empty() {
+                emitter.writeln(&format!(
+                    "local self = setmetatable({}.{}(), {})",
+                    parent, parent_new, class_name
+                ));
+            } else {
+                emitter.writeln(&format!(
+                    "local self = setmetatable({}.{}({}), {})",
+                    parent, parent_new, super_args, class_name
+                ));
+            }
+        }
+
+        if class.is_abstract {
+            emitter.writeln(&format!(
+                "__luao_abstract_guard(self, {}, \"{}\")",
+                class_name, class_name
+            ));
+            emitter.needs_abstract_guard = true;
+        }
+
+        emit_default_fields(emitter, class);
+
+        // Emit statements after super.new()
+        for stmt in &ctor.body.statements[idx + 1..] {
+            emitter.emit_statement(stmt);
+        }
+    } else {
+        // No super call — create self directly
+        emitter.writeln(&format!("local self = setmetatable({{}}, {})", class_name));
+
+        if class.is_abstract {
+            emitter.writeln(&format!(
+                "__luao_abstract_guard(self, {}, \"{}\")",
+                class_name, class_name
+            ));
+            emitter.needs_abstract_guard = true;
+        }
+
+        emit_default_fields(emitter, class);
+
+        for stmt in &ctor.body.statements {
+            emitter.emit_statement(stmt);
+        }
     }
 
     emitter.local_var_types = saved_var_types;
+    emitter.writeln("return self");
     emitter.dedent();
     emitter.writeln("end");
     emitter.newline();
+}
+
+/// Check if a statement is a super.new() call.
+fn is_super_new_call(stmt: &luao_parser::Statement) -> bool {
+    if let luao_parser::Statement::ExpressionStatement(expr) = stmt {
+        if let Expression::FunctionCall(call) = expr {
+            if let Expression::SuperAccess(sa) = &call.callee {
+                return sa.method.name.as_str() == "new";
+            }
+        }
+    }
+    false
+}
+
+/// Extract the arguments from a super.new() call as a comma-separated string.
+fn extract_super_new_args(emitter: &mut Emitter, stmt: &luao_parser::Statement) -> String {
+    if let luao_parser::Statement::ExpressionStatement(expr) = stmt {
+        if let Expression::FunctionCall(call) = expr {
+            return call.args.iter()
+                .map(|a| emit_expression(emitter, a))
+                .collect::<Vec<_>>()
+                .join(", ");
+        }
+    }
+    String::new()
 }
 
 fn emit_default_constructor(
@@ -142,7 +189,15 @@ fn emit_default_constructor(
     emitter.writeln(&format!("function {}.{}()", class_name, new_name));
     emitter.indent();
 
-    emitter.writeln(&format!("local self = setmetatable({{}}, {})", class_name));
+    if let Some(parent) = parent_name {
+        let parent_new = emitter.mangle_shared("new");
+        emitter.writeln(&format!(
+            "local self = setmetatable({}.{}(), {})",
+            parent, parent_new, class_name
+        ));
+    } else {
+        emitter.writeln(&format!("local self = setmetatable({{}}, {})", class_name));
+    }
 
     if class.is_abstract {
         emitter.writeln(&format!(
@@ -150,11 +205,6 @@ fn emit_default_constructor(
             class_name, class_name
         ));
         emitter.needs_abstract_guard = true;
-    }
-
-    if let Some(parent) = parent_name {
-        // Call parent _init to initialize parent fields
-        emitter.writeln(&format!("{}._init(self)", parent));
     }
 
     emit_default_fields(emitter, class);
@@ -190,37 +240,6 @@ fn is_parent_extern(emitter: &Emitter, parent_name: &Option<String>) -> bool {
     false
 }
 
-fn emit_constructor_statement(
-    emitter: &mut Emitter,
-    stmt: &luao_parser::Statement,
-    parent_name: &Option<String>,
-    class_name: &str,
-) {
-    if let luao_parser::Statement::ExpressionStatement(expr) = stmt {
-        if let Expression::FunctionCall(call) = expr {
-            if let Expression::SuperAccess(sa) = &call.callee {
-                if sa.method.name.as_str() == "new" {
-                    if let Some(parent) = parent_name {
-                        let args = call
-                            .args
-                            .iter()
-                            .map(|a| emit_expression(emitter, a))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        // Call parent _init with self to initialize parent fields
-                        if args.is_empty() {
-                            emitter.writeln(&format!("{}._init(self)", parent));
-                        } else {
-                            emitter.writeln(&format!("{}._init(self, {})", parent, args));
-                        }
-                        return;
-                    }
-                }
-            }
-        }
-    }
-    emitter.emit_statement(stmt);
-}
 
 fn emit_method(
     emitter: &mut Emitter,
