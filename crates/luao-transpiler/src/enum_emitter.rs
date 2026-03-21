@@ -35,7 +35,7 @@ pub fn emit_enum(emitter: &mut Emitter, enum_decl: &EnumDecl) {
         reverse_entries.push(format!("[{}] = \"{}\"", value, output_name));
     }
 
-    let local_prefix = if emitter.is_exported(&name) { "" } else { "local " };
+    let local_prefix = if emitter.should_skip_local() || emitter.is_exported(&name) { "" } else { "local " };
     emitter.writeln(&format!(
         "{}{} = {{ {} }}",
         local_prefix, name,

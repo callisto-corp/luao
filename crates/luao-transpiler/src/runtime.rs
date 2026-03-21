@@ -18,65 +18,293 @@ pub const ABSTRACT_GUARD_FN: &str = r#"function __luao_abstract_guard(self, clas
     end
 end"#;
 
-pub const ASYNC_RUNTIME: &str = r#"function __luao_async(fn)
-    local task = {
+pub const PROMISE_RUNTIME: &str = r#"local Promise = {}
+Promise.__index = Promise
+
+Promise.Status = { Started = "Started", Resolved = "Resolved", Rejected = "Rejected", Cancelled = "Cancelled" }
+
+function Promise.new(executor)
+    local self = setmetatable({
+        _status = "Started",
+        _value = nil,
         _callbacks = {},
-        _status = "pending",
-    }
-    task._co = coroutine.create(fn)
-    local function finish(ok, result)
-        if ok then
-            task._status = "resolved"
-            task._result = result
-        else
-            task._status = "rejected"
-            task._error = result
-        end
-        for i = 1, #task._callbacks do
-            task._callbacks[i](task._result, task._error)
-        end
+        _cancelHook = nil,
+    }, Promise)
+
+    local function resolve(value)
+        if self._status ~= "Started" then return end
+        self._status = "Resolved"
+        self._value = value
+        for _, cb in ipairs(self._callbacks) do cb(self._status, value) end
     end
-    local function step(value)
-        local ok, yielded = coroutine.resume(task._co, value)
-        if not ok then
-            finish(false, yielded)
-            return
-        end
-        if coroutine.status(task._co) == "dead" then
-            finish(true, yielded)
-        elseif type(yielded) == "table" and yielded._status ~= nil then
-            if yielded._status ~= "pending" then
-                step(yielded._result)
-            else
-                yielded:andThen(function(result, err)
-                    if err then finish(false, err) else step(result) end
-                end)
-            end
-        else
-            step(yielded)
-        end
+
+    local function reject(reason)
+        if self._status ~= "Started" then return end
+        self._status = "Rejected"
+        self._value = reason
+        for _, cb in ipairs(self._callbacks) do cb(self._status, reason) end
     end
-    function task:andThen(cb)
-        if self._status ~= "pending" then
-            cb(self._result, self._error)
-        else
-            self._callbacks[#self._callbacks + 1] = cb
-        end
-        return self
+
+    local function onCancel(hook)
+        self._cancelHook = hook
     end
-    function task:await()
-        while self._status == "pending" do
-            coroutine.yield()
-        end
-        if self._error then error(self._error) end
-        return self._result
+
+    local ok, err = pcall(executor, resolve, reject, onCancel)
+    if not ok and self._status == "Started" then
+        reject(err)
     end
-    step()
-    return task
+
+    return self
 end
 
-function __luao_await(value)
-    return coroutine.yield(value)
+function Promise.resolve(value)
+    return Promise.new(function(resolve) resolve(value) end)
+end
+
+function Promise.reject(reason)
+    return Promise.new(function(_, reject) reject(reason) end)
+end
+
+function Promise:andThen(onFulfilled, onRejected)
+    return Promise.new(function(resolve, reject)
+        local function handle(status, value)
+            if status == "Resolved" then
+                if onFulfilled then
+                    local ok, result = pcall(onFulfilled, value)
+                    if ok then
+                        if type(result) == "table" and getmetatable(result) == Promise then
+                            result:andThen(resolve, reject)
+                        else
+                            resolve(result)
+                        end
+                    else
+                        reject(result)
+                    end
+                else
+                    resolve(value)
+                end
+            elseif status == "Rejected" then
+                if onRejected then
+                    local ok, result = pcall(onRejected, value)
+                    if ok then
+                        resolve(result)
+                    else
+                        reject(result)
+                    end
+                else
+                    reject(value)
+                end
+            end
+        end
+        if self._status == "Resolved" or self._status == "Rejected" then
+            handle(self._status, self._value)
+        else
+            self._callbacks[#self._callbacks + 1] = handle
+        end
+    end)
+end
+
+function Promise:catch(onRejected)
+    return self:andThen(nil, onRejected)
+end
+
+function Promise:finally(callback)
+    return self:andThen(function(value)
+        callback()
+        return value
+    end, function(reason)
+        callback()
+        error(reason)
+    end)
+end
+
+function Promise:await()
+    if self._status == "Resolved" then
+        return self._status, self._value
+    elseif self._status == "Rejected" then
+        return self._status, self._value
+    end
+    local co = coroutine.running()
+    if co then
+        self:andThen(function(value)
+            coroutine.resume(co, "Resolved", value)
+        end, function(reason)
+            coroutine.resume(co, "Rejected", reason)
+        end)
+        return coroutine.yield()
+    end
+    return self._status, self._value
+end
+
+function Promise:expect()
+    local status, value = self:await()
+    if status == "Rejected" then
+        error(value, 2)
+    end
+    return value
+end
+
+function Promise:cancel()
+    if self._status ~= "Started" then return end
+    self._status = "Cancelled"
+    if self._cancelHook then
+        self._cancelHook()
+    end
+    for _, cb in ipairs(self._callbacks) do cb(self._status, nil) end
+end
+
+function Promise:getStatus()
+    return self._status
+end
+
+function Promise.all(promises)
+    return Promise.new(function(resolve, reject)
+        local results = {}
+        local remaining = #promises
+        if remaining == 0 then resolve(results) return end
+        for i, p in ipairs(promises) do
+            p:andThen(function(value)
+                results[i] = value
+                remaining = remaining - 1
+                if remaining == 0 then resolve(results) end
+            end, function(reason)
+                reject(reason)
+            end)
+        end
+    end)
+end
+
+function Promise.race(promises)
+    return Promise.new(function(resolve, reject)
+        for _, p in ipairs(promises) do
+            p:andThen(resolve, reject)
+        end
+    end)
+end
+
+function Promise.allSettled(promises)
+    return Promise.new(function(resolve)
+        local results = {}
+        local remaining = #promises
+        if remaining == 0 then resolve(results) return end
+        for i, p in ipairs(promises) do
+            p:andThen(function(value)
+                results[i] = { status = "Resolved", value = value }
+                remaining = remaining - 1
+                if remaining == 0 then resolve(results) end
+            end, function(reason)
+                results[i] = { status = "Rejected", reason = reason }
+                remaining = remaining - 1
+                if remaining == 0 then resolve(results) end
+            end)
+        end
+    end)
+end
+
+function Promise.any(promises)
+    return Promise.new(function(resolve, reject)
+        local errors = {}
+        local remaining = #promises
+        if remaining == 0 then reject("All promises were rejected") return end
+        for i, p in ipairs(promises) do
+            p:andThen(function(value)
+                resolve(value)
+            end, function(reason)
+                errors[i] = reason
+                remaining = remaining - 1
+                if remaining == 0 then reject(errors) end
+            end)
+        end
+    end)
+end
+
+function Promise.some(promises, count)
+    return Promise.new(function(resolve, reject)
+        local results = {}
+        local errors = {}
+        local resolved = 0
+        local rejected = 0
+        local total = #promises
+        if total == 0 or count <= 0 then resolve(results) return end
+        for i, p in ipairs(promises) do
+            p:andThen(function(value)
+                if resolved < count then
+                    results[#results + 1] = value
+                    resolved = resolved + 1
+                    if resolved >= count then resolve(results) end
+                end
+            end, function(reason)
+                errors[i] = reason
+                rejected = rejected + 1
+                if rejected > total - count then reject(errors) end
+            end)
+        end
+    end)
+end
+
+function Promise.delay(seconds)
+    return Promise.new(function(resolve, _, onCancel)
+        local cancelled = false
+        onCancel(function() cancelled = true end)
+        task.delay(seconds, function()
+            if not cancelled then resolve() end
+        end)
+    end)
+end
+
+function Promise.try(fn, ...)
+    local args = {...}
+    return Promise.new(function(resolve, reject)
+        local ok, result = pcall(fn, table.unpack(args))
+        if ok then
+            if type(result) == "table" and getmetatable(result) == Promise then
+                result:andThen(resolve, reject)
+            else
+                resolve(result)
+            end
+        else
+            reject(result)
+        end
+    end)
+end
+
+function Promise.is(value)
+    return type(value) == "table" and getmetatable(value) == Promise
+end
+
+function __luao_yield(promise)
+    local ok, val = coroutine.yield(promise)
+    if not ok then error(val, 2) end
+    return val
+end
+
+function __luao_async(fn)
+    return Promise.new(function(resolve, reject)
+        local co = coroutine.create(fn)
+        local function step(ok, ...)
+            local results = {coroutine.resume(co, ok, ...)}
+            local resumed = results[1]
+            if not resumed then
+                reject(results[2])
+                return
+            end
+            if coroutine.status(co) == "dead" then
+                resolve(results[2])
+                return
+            end
+            local yielded = results[2]
+            if Promise.is(yielded) then
+                yielded:andThen(function(val)
+                    step(true, val)
+                end, function(err)
+                    step(false, err)
+                end)
+            else
+                step(true, yielded)
+            end
+        end
+        step(true)
+    end)
 end"#;
 
 pub const ARRAY_RUNTIME: &str = r##"local __luao_Array

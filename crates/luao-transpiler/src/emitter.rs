@@ -18,6 +18,7 @@ pub struct Emitter {
     pub(crate) needs_abstract_guard: bool,
     pub(crate) needs_async: bool,
     pub(crate) needs_array: bool,
+    pub(crate) in_async_context: bool,
     pub(crate) current_class: Option<String>,
     pub(crate) current_class_parent: Option<String>,
     pub(crate) mangler: Option<Mangler>,
@@ -43,6 +44,8 @@ pub struct Emitter {
     pub(crate) local_var_types: HashMap<String, String>,
     /// When set, table constructor field names are mangled using this type.
     pub(crate) table_target_type: Option<String>,
+    /// When true, all top-level declarations omit the `local` keyword (bundled globals mode).
+    pub(crate) bundle_globals_mode: bool,
 }
 
 impl Emitter {
@@ -56,6 +59,7 @@ impl Emitter {
             needs_abstract_guard: false,
             needs_async: false,
             needs_array: false,
+            in_async_context: false,
             current_class: None,
             current_class_parent: None,
             mangler,
@@ -68,6 +72,7 @@ impl Emitter {
             self_param_name: None,
             local_var_types: HashMap::new(),
             table_target_type: None,
+            bundle_globals_mode: false,
         }
     }
 
@@ -95,7 +100,7 @@ impl Emitter {
             preamble.push('\n');
         }
         if self.needs_async {
-            preamble.push_str(runtime::ASYNC_RUNTIME);
+            preamble.push_str(runtime::PROMISE_RUNTIME);
             preamble.push('\n');
             preamble.push('\n');
         }
@@ -217,6 +222,12 @@ impl Emitter {
     /// Check if a name is exported (should skip `local` in bundled output).
     pub fn is_exported(&self, name: &str) -> bool {
         self.exported_names.contains(name)
+    }
+
+    /// Check if `local` should be suppressed for a top-level declaration.
+    /// True when in bundle globals mode and at the top-level scope (indent 0).
+    pub fn should_skip_local(&self) -> bool {
+        self.bundle_globals_mode && self.indent_level == 0
     }
 
     /// Get the mangled name for a shared member (like _new, _values).

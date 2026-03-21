@@ -10,7 +10,12 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
         Expression::Number(n, _) => n.to_string(),
         Expression::String(s, _) => s.to_string(),
         Expression::Vararg(_) => "...".to_string(),
-        Expression::Identifier(id) => emitter.rename(&id.name),
+        Expression::Identifier(id) => {
+            if id.name.as_str() == "Promise" {
+                emitter.needs_async = true;
+            }
+            emitter.rename(&id.name)
+        }
         Expression::BinaryOp(bin) => {
             let left = emit_expression(emitter, &bin.left);
             let right = emit_expression(emitter, &bin.right);
@@ -94,6 +99,8 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
                 } else {
                     "coroutine.wrap"
                 };
+                let saved_async_ctx = emitter.in_async_context;
+                emitter.in_async_context = fe.is_async;
                 let mut result = format!("function({})\n", params);
                 let saved_output = std::mem::take(&mut emitter.output);
                 emitter.indent();
@@ -105,9 +112,12 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
                 result.push_str(&body);
                 emitter.write_indent();
                 result.push_str("end");
+                emitter.in_async_context = saved_async_ctx;
                 emitter.local_var_types = saved_var_types;
                 result
             } else {
+                let saved_async_ctx = emitter.in_async_context;
+                emitter.in_async_context = false;
                 let mut result = format!("function({})\n", params);
                 let saved_output = std::mem::take(&mut emitter.output);
                 emitter.emit_block(&fe.body);
@@ -115,6 +125,7 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
                 result.push_str(&body);
                 emitter.write_indent();
                 result.push_str("end");
+                emitter.in_async_context = saved_async_ctx;
                 emitter.local_var_types = saved_var_types;
                 result
             }
@@ -198,7 +209,11 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
         Expression::AwaitExpr(ae) => {
             emitter.needs_async = true;
             let expr = emit_expression(emitter, &ae.expr);
-            format!("__luao_await({})", expr)
+            if emitter.in_async_context {
+                format!("__luao_yield({})", expr)
+            } else {
+                format!("({}):expect()", expr)
+            }
         }
         Expression::ArrayLiteral(al) => {
             emitter.needs_array = true;

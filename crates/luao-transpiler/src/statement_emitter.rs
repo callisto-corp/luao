@@ -28,11 +28,11 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
                 }
             }
 
-            // If all names are exported (forward-declared), skip `local`
-            let all_exported = names.iter().all(|n| emitter.is_exported(n));
-            let prefix = if all_exported { "" } else { "local " };
+            // Skip `local` in bundle globals mode or if all names are exported (forward-declared)
+            let skip_local = emitter.should_skip_local() || names.iter().all(|n| emitter.is_exported(n));
+            let prefix = if skip_local { "" } else { "local " };
             if la.values.is_empty() {
-                if !all_exported {
+                if !skip_local {
                     emitter.writeln(&format!("{}{}", prefix, names.join(", ")));
                 }
             } else {
@@ -127,7 +127,7 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
                 emitter.needs_async = true;
             }
 
-            if fd.is_local && !emitter.is_exported(&name) {
+            if fd.is_local && !emitter.should_skip_local() && !emitter.is_exported(&name) {
                 emitter.writeln(&format!("local function {}({})", name, params));
             } else {
                 emitter.writeln(&format!("function {}({})", name, params));
@@ -135,13 +135,19 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
 
             if fd.is_generator || fd.is_async {
                 let wrapper = if fd.is_async { "__luao_async" } else { "coroutine.wrap" };
+                let saved_async_ctx = emitter.in_async_context;
+                emitter.in_async_context = fd.is_async;
                 emitter.indent();
                 emitter.writeln(&format!("return {}(function()", wrapper));
                 emitter.emit_block(&fd.body);
                 emitter.writeln("end)");
                 emitter.dedent();
+                emitter.in_async_context = saved_async_ctx;
             } else {
+                let saved_async_ctx = emitter.in_async_context;
+                emitter.in_async_context = false;
                 emitter.emit_block(&fd.body);
+                emitter.in_async_context = saved_async_ctx;
             }
             emitter.writeln("end");
             emitter.local_var_types = saved_var_types;

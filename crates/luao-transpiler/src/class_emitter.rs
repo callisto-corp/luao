@@ -14,7 +14,7 @@ pub fn emit_class(emitter: &mut Emitter, class: &ClassDecl) {
     emitter.current_class = Some(class_name.clone());
     emitter.current_class_parent = parent_name.clone();
 
-    let local_prefix = if emitter.is_exported(&class_name) { "" } else { "local " };
+    let local_prefix = if emitter.should_skip_local() || emitter.is_exported(&class_name) { "" } else { "local " };
     if let Some(ref parent) = parent_name {
         emitter.writeln(&format!(
             "{}{} = setmetatable({{}}, {{ __index = {} }})",
@@ -304,13 +304,19 @@ fn emit_method(
 
         if method.is_generator || method.is_async {
             let wrapper = if method.is_async { "__luao_async" } else { "coroutine.wrap" };
+            let saved_async_ctx = emitter.in_async_context;
+            emitter.in_async_context = method.is_async;
             emitter.indent();
             emitter.writeln(&format!("return {}(function()", wrapper));
             emitter.emit_block(body);
             emitter.writeln("end)");
             emitter.dedent();
+            emitter.in_async_context = saved_async_ctx;
         } else {
+            let saved_async_ctx = emitter.in_async_context;
+            emitter.in_async_context = false;
             emitter.emit_block(body);
+            emitter.in_async_context = saved_async_ctx;
         }
 
         emitter.current_class_parent = saved_parent;

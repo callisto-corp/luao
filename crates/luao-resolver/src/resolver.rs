@@ -12,6 +12,9 @@ use crate::types::LuaoType;
 pub struct Resolver {
     symbol_table: SymbolTable,
     source_file: Option<String>,
+    /// When true, built-in base classes (Promise) are NOT marked as extern,
+    /// allowing their members to be mangled.
+    pub mangle_baseclasses: bool,
 }
 
 impl Resolver {
@@ -19,6 +22,7 @@ impl Resolver {
         Self {
             symbol_table: SymbolTable::new(),
             source_file: None,
+            mangle_baseclasses: false,
         }
     }
 
@@ -26,11 +30,194 @@ impl Resolver {
         let global_scope = Scope::new(ScopeKind::Global, None);
         self.symbol_table.scopes.push(global_scope);
 
+        self.register_promise_builtin();
+
         for stmt in &file.statements {
             self.resolve_statement(stmt);
         }
 
         std::mem::replace(&mut self.symbol_table, SymbolTable::new())
+    }
+
+    fn register_promise_builtin(&mut self) {
+        let id = self.symbol_table.next_symbol_id();
+        let is_extern = !self.mangle_baseclasses;
+        let promise_methods = vec![
+            MethodSymbol {
+                name: "new".to_string(),
+                params: vec![("executor".to_string(), LuaoType::Function(vec![], Box::new(LuaoType::Any)))],
+                return_type: LuaoType::TypeParam("Promise".to_string()),
+                access: AccessModifier::Public,
+                is_static: true, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "resolve".to_string(),
+                params: vec![("value".to_string(), LuaoType::Any)],
+                return_type: LuaoType::TypeParam("Promise".to_string()),
+                access: AccessModifier::Public,
+                is_static: true, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "reject".to_string(),
+                params: vec![("reason".to_string(), LuaoType::Any)],
+                return_type: LuaoType::TypeParam("Promise".to_string()),
+                access: AccessModifier::Public,
+                is_static: true, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "andThen".to_string(),
+                params: vec![
+                    ("onFulfilled".to_string(), LuaoType::Function(vec![], Box::new(LuaoType::Any))),
+                    ("onRejected".to_string(), LuaoType::Function(vec![], Box::new(LuaoType::Any))),
+                ],
+                return_type: LuaoType::TypeParam("Promise".to_string()),
+                access: AccessModifier::Public,
+                is_static: false, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "catch".to_string(),
+                params: vec![("onRejected".to_string(), LuaoType::Function(vec![], Box::new(LuaoType::Any)))],
+                return_type: LuaoType::TypeParam("Promise".to_string()),
+                access: AccessModifier::Public,
+                is_static: false, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "finally".to_string(),
+                params: vec![("callback".to_string(), LuaoType::Function(vec![], Box::new(LuaoType::Any)))],
+                return_type: LuaoType::TypeParam("Promise".to_string()),
+                access: AccessModifier::Public,
+                is_static: false, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "await".to_string(),
+                params: vec![],
+                return_type: LuaoType::Any,
+                access: AccessModifier::Public,
+                is_static: false, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "expect".to_string(),
+                params: vec![],
+                return_type: LuaoType::Any,
+                access: AccessModifier::Public,
+                is_static: false, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "cancel".to_string(),
+                params: vec![],
+                return_type: LuaoType::Void,
+                access: AccessModifier::Public,
+                is_static: false, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "getStatus".to_string(),
+                params: vec![],
+                return_type: LuaoType::String,
+                access: AccessModifier::Public,
+                is_static: false, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "all".to_string(),
+                params: vec![("promises".to_string(), LuaoType::Any)],
+                return_type: LuaoType::TypeParam("Promise".to_string()),
+                access: AccessModifier::Public,
+                is_static: true, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "race".to_string(),
+                params: vec![("promises".to_string(), LuaoType::Any)],
+                return_type: LuaoType::TypeParam("Promise".to_string()),
+                access: AccessModifier::Public,
+                is_static: true, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "allSettled".to_string(),
+                params: vec![("promises".to_string(), LuaoType::Any)],
+                return_type: LuaoType::TypeParam("Promise".to_string()),
+                access: AccessModifier::Public,
+                is_static: true, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "any".to_string(),
+                params: vec![("promises".to_string(), LuaoType::Any)],
+                return_type: LuaoType::TypeParam("Promise".to_string()),
+                access: AccessModifier::Public,
+                is_static: true, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "some".to_string(),
+                params: vec![("promises".to_string(), LuaoType::Any), ("count".to_string(), LuaoType::Number)],
+                return_type: LuaoType::TypeParam("Promise".to_string()),
+                access: AccessModifier::Public,
+                is_static: true, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "delay".to_string(),
+                params: vec![("seconds".to_string(), LuaoType::Number)],
+                return_type: LuaoType::TypeParam("Promise".to_string()),
+                access: AccessModifier::Public,
+                is_static: true, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "try".to_string(),
+                params: vec![("fn".to_string(), LuaoType::Function(vec![], Box::new(LuaoType::Any)))],
+                return_type: LuaoType::TypeParam("Promise".to_string()),
+                access: AccessModifier::Public,
+                is_static: true, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+            MethodSymbol {
+                name: "is".to_string(),
+                params: vec![("value".to_string(), LuaoType::Any)],
+                return_type: LuaoType::Boolean,
+                access: AccessModifier::Public,
+                is_static: true, is_abstract: false, is_override: false,
+                is_extern, is_async: false, is_generator: false,
+            },
+        ];
+
+        let promise_fields = vec![
+            FieldSymbol {
+                name: "Status".to_string(),
+                type_info: LuaoType::Any,
+                access: AccessModifier::Public,
+                is_static: true,
+                is_readonly: true,
+                is_extern,
+            },
+        ];
+
+        let class_sym = ClassSymbol {
+            id,
+            name: "Promise".to_string(),
+            parent: None,
+            interfaces: vec![],
+            fields: promise_fields,
+            methods: promise_methods,
+            is_abstract: false,
+            is_sealed: false,
+            is_extern,
+            type_params: vec!["T".to_string()],
+            source_file: None,
+        };
+
+        self.symbol_table.register_class(class_sym);
     }
 
     fn resolve_statement(&mut self, stmt: &Statement) {

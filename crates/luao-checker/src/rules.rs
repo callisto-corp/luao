@@ -2787,7 +2787,8 @@ pub fn check_await_outside_async(
     _symbols: &SymbolTable,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    check_await_in_block(&file.statements, false, &mut diagnostics);
+    // Top-level await is allowed (emits :expect()), so pass true for top-level
+    check_await_in_block(&file.statements, true, &mut diagnostics);
     diagnostics
 }
 
@@ -2861,10 +2862,98 @@ fn check_await_in_expr(expr: &Expression, in_async: bool, diagnostics: &mut Vec<
     if let Expression::AwaitExpr(ae) = expr {
         if !in_async {
             diagnostics.push(Diagnostic::error(
-                "'await' can only be used inside an async function".to_string(),
+                "'await' can only be used inside an async function or at the top level".to_string(),
                 ae.span,
                 "E022",
             ));
         }
+    }
+}
+
+// =============================================================================
+// E023: Reserved built-in type name
+// =============================================================================
+
+const RESERVED_BUILTIN_NAMES: &[&str] = &["Promise"];
+
+pub fn check_reserved_names(
+    file: &SourceFile,
+    _symbols: &SymbolTable,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    check_reserved_in_stmts(&file.statements, &mut diagnostics);
+    diagnostics
+}
+
+fn check_reserved_in_stmts(stmts: &[Statement], diagnostics: &mut Vec<Diagnostic>) {
+    for stmt in stmts {
+        check_reserved_in_stmt(stmt, diagnostics);
+    }
+}
+
+fn check_reserved_in_stmt(stmt: &Statement, diagnostics: &mut Vec<Diagnostic>) {
+    match stmt {
+        Statement::ClassDecl(cd) => {
+            if RESERVED_BUILTIN_NAMES.contains(&cd.name.name.as_str()) {
+                diagnostics.push(Diagnostic::error(
+                    format!("'{}' is a reserved built-in type and cannot be redeclared", cd.name.name),
+                    cd.name.span,
+                    "E023",
+                ));
+            }
+        }
+        Statement::InterfaceDecl(id) => {
+            if RESERVED_BUILTIN_NAMES.contains(&id.name.name.as_str()) {
+                diagnostics.push(Diagnostic::error(
+                    format!("'{}' is a reserved built-in type and cannot be redeclared", id.name.name),
+                    id.name.span,
+                    "E023",
+                ));
+            }
+        }
+        Statement::EnumDecl(ed) => {
+            if RESERVED_BUILTIN_NAMES.contains(&ed.name.name.as_str()) {
+                diagnostics.push(Diagnostic::error(
+                    format!("'{}' is a reserved built-in type and cannot be redeclared", ed.name.name),
+                    ed.name.span,
+                    "E023",
+                ));
+            }
+        }
+        Statement::TypeAlias(ta) => {
+            if RESERVED_BUILTIN_NAMES.contains(&ta.name.name.as_str()) {
+                diagnostics.push(Diagnostic::error(
+                    format!("'{}' is a reserved built-in type and cannot be redeclared", ta.name.name),
+                    ta.name.span,
+                    "E023",
+                ));
+            }
+        }
+        Statement::LocalAssignment(la) => {
+            for name_id in &la.names {
+                if RESERVED_BUILTIN_NAMES.contains(&name_id.name.as_str()) {
+                    diagnostics.push(Diagnostic::error(
+                        format!("'{}' is a reserved built-in type and cannot be redeclared", name_id.name),
+                        name_id.span,
+                        "E023",
+                    ));
+                }
+            }
+        }
+        Statement::FunctionDecl(fd) => {
+            if let Some(first) = fd.name.parts.first() {
+                if RESERVED_BUILTIN_NAMES.contains(&first.name.as_str()) {
+                    diagnostics.push(Diagnostic::error(
+                        format!("'{}' is a reserved built-in type and cannot be redeclared", first.name),
+                        first.span,
+                        "E023",
+                    ));
+                }
+            }
+        }
+        Statement::ExportDecl(inner, _) => {
+            check_reserved_in_stmt(inner, diagnostics);
+        }
+        _ => {}
     }
 }

@@ -25,101 +25,29 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
     // Phase 1: Gather all modules recursively
     let mut modules: HashMap<PathBuf, Module> = HashMap::new();
     let mut load_order: Vec<PathBuf> = Vec::new();
-    gather_modules(entrypoint, &mut modules, &mut load_order, &mut HashSet::new())?;
+    gather_modules(entrypoint, &mut modules, &mut load_order, &mut HashSet::new(), options)?;
 
     let entry_canonical = canonicalize_path(entrypoint)?;
 
     // Phase 2: Topological sort (files)
     let sorted_files = topological_sort(&load_order, &entry_canonical);
 
-    // Phase 3: Collect all exported names and check for conflicts
-    let mut all_exports: Vec<(String, PathBuf)> = Vec::new();
-    for path in &sorted_files {
-        let module = &modules[path];
-        for name in &module.exports {
-            if let Some((_, existing_path)) = all_exports.iter().find(|(n, _)| n == name) {
-                return Err(vec![format!(
-                    "export name conflict: '{}' is exported by both '{}' and '{}'",
-                    name,
-                    existing_path.display(),
-                    path.display()
-                )]);
-            }
-            all_exports.push((name.clone(), path.clone()));
-        }
-    }
-
-    // Phase 4: Assign globally unique names.
-    // User code (locals, globals, free variables) gets priority — keeps original names.
-    // Exports get renamed with numeric suffixes if they conflict.
-    let mut used_names: HashSet<String> = HashSet::new();
+    // Phase 3-4: Assign globally unique names using 0-indexed suffixes.
+    // Every top-level name (exported or not) gets a numeric suffix: name0, name1, ...
+    // No conflict detection needed — uniqueness is guaranteed by construction.
+    let mut name_counters: HashMap<String, usize> = HashMap::new();
     let mut file_rename_maps: HashMap<PathBuf, HashMap<String, String>> = HashMap::new();
 
-    // Step 1: Reserve all non-exported names from all files first (user code has priority)
     for path in &sorted_files {
         let module = &modules[path];
-        let exported_set: HashSet<&str> = module.exports.iter().map(|s| s.as_str()).collect();
-
-        // Collect top-level locals
-        let locals = collect_top_level_locals(&module.ast, &exported_set);
-        for name in &locals {
-            used_names.insert(name.clone());
-        }
-
-        // Collect free variable references (assignments without local, bare identifiers)
-        let free_vars = collect_free_variables(&module.ast, &exported_set);
-        for name in &free_vars {
-            used_names.insert(name.clone());
-        }
-    }
-
-    // Step 2: Assign unique names for exports — renamed if they conflict with user code
-    let mut export_rename_map: HashMap<(PathBuf, String), String> = HashMap::new();
-    for path in &sorted_files {
-        let module = &modules[path];
-        for name in &module.exports {
-            let unique = get_unique_name(name, &mut used_names);
-            if unique != *name {
-                export_rename_map.insert((path.clone(), name.clone()), unique);
-            }
-        }
-    }
-
-    // Step 3: Build per-file rename maps
-    // Non-exported locals that conflict with OTHER files' non-exported locals get renamed
-    let mut seen_locals: HashSet<String> = HashSet::new();
-    // Re-reserve export names (now with their final unique names)
-    for path in &sorted_files {
-        let module = &modules[path];
-        for name in &module.exports {
-            let final_name = export_rename_map
-                .get(&(path.clone(), name.clone()))
-                .cloned()
-                .unwrap_or_else(|| name.clone());
-            seen_locals.insert(final_name);
-        }
-    }
-
-    for path in &sorted_files {
-        let module = &modules[path];
-        let exported_set: HashSet<&str> = module.exports.iter().map(|s| s.as_str()).collect();
         let mut rename_map = HashMap::new();
 
-        // Add export renames for this file
-        for name in &module.exports {
-            if let Some(new_name) = export_rename_map.get(&(path.clone(), name.clone())) {
-                rename_map.insert(name.clone(), new_name.clone());
-            }
-        }
-
-        // Non-exported locals: rename if they conflict with another file's locals
-        let locals = collect_top_level_locals(&module.ast, &exported_set);
-        for local_name in &locals {
-            if !seen_locals.insert(local_name.clone()) {
-                // Already seen in another file — need a unique name
-                let unique = get_unique_name(local_name, &mut seen_locals);
-                rename_map.insert(local_name.clone(), unique);
-            }
+        let all_names = collect_all_top_level_names(&module.ast);
+        for name in &all_names {
+            let idx = name_counters.entry(name.clone()).or_insert(0);
+            let unique = format!("{}{}", name, idx);
+            *idx += 1;
+            rename_map.insert(name.clone(), unique);
         }
 
         file_rename_maps.insert(path.clone(), rename_map);
@@ -146,13 +74,13 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
                         name, import.path
                     )]);
                 }
-                // Get the final name of the export (may have been renamed)
-                let final_export_name = export_rename_map
-                    .get(&(dep_path.clone(), name.clone()))
+                // Get the final name of the export from the dep's rename map
+                let dep_rename_map = file_rename_maps.get(&dep_path);
+                let final_export_name = dep_rename_map
+                    .and_then(|m| m.get(name))
                     .cloned()
                     .unwrap_or_else(|| name.clone());
                 // alias in source → final export name in bundle
-                // Always map if the final name differs from the alias
                 if *alias != final_export_name {
                     alias_map.insert(alias.clone(), final_export_name);
                 }
@@ -217,8 +145,9 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
         for import in &module.imports {
             let dep_path = resolve_import_path(&module.path, &import.path)?;
             for (name, alias) in &import.names {
-                let final_name = export_rename_map
-                    .get(&(dep_path.clone(), name.clone()))
+                let dep_rename_map = file_rename_maps.get(&dep_path);
+                let final_name = dep_rename_map
+                    .and_then(|m| m.get(name))
                     .cloned()
                     .unwrap_or_else(|| name.clone());
                 resolution.insert(alias.clone(), final_name);
@@ -263,6 +192,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
             let mangler = shared_mangler.take();
             let mut emitter = crate::Emitter::new(merged_symbols.clone(), mangler);
             emitter.no_self = options.no_self;
+            emitter.bundle_globals_mode = true;
             emitter.local_renames = rename_map.clone();
             emitter.import_aliases = alias_map.clone();
             // Seed emitter with type info only for names this file imports
@@ -339,16 +269,11 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
         emitted: &mut HashSet<usize>,
         emitting: &mut HashSet<usize>,
         ordered: &mut Vec<usize>,
-        forward_decls: &mut Vec<String>,
     ) {
         if emitted.contains(&idx) { return; }
         if emitting.contains(&idx) {
-            // True circular dependency — forward declare all names this item defines
-            for name in &items[idx].defines {
-                if !forward_decls.contains(name) {
-                    forward_decls.push(name.clone());
-                }
-            }
+            // Circular dependency — no forward declaration needed since all
+            // top-level names are globals (nil by default, late-bound in closures).
             return;
         }
         emitting.insert(idx);
@@ -357,7 +282,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
         for used_name in &items[idx].uses {
             if let Some(&dep_idx) = name_to_item.get(used_name) {
                 if dep_idx != idx && !emitted.contains(&dep_idx) {
-                    emit_item(dep_idx, items, name_to_item, emitted, emitting, ordered, forward_decls);
+                    emit_item(dep_idx, items, name_to_item, emitted, emitting, ordered);
                 }
             }
         }
@@ -369,11 +294,9 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
         }
     }
 
-    let mut forward_decl_names: Vec<String> = Vec::new();
-
     // Process items in their original order — only pull deps up when needed
     for idx in 0..items.len() {
-        emit_item(idx, &items, &name_to_item, &mut emitted, &mut emitting, &mut ordered, &mut forward_decl_names);
+        emit_item(idx, &items, &name_to_item, &mut emitted, &mut emitting, &mut ordered);
     }
 
     // Phase 8: Assemble the bundle
@@ -405,7 +328,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
         bundle.push_str("\n\n");
     }
     if runtime_needs_async {
-        bundle.push_str(crate::runtime::ASYNC_RUNTIME);
+        bundle.push_str(crate::runtime::PROMISE_RUNTIME);
         bundle.push_str("\n\n");
     }
     if runtime_needs_array {
@@ -413,22 +336,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
         bundle.push_str("\n\n");
     }
 
-    // Forward declarations only for true circular dependencies
-    if !forward_decl_names.is_empty() {
-        bundle.push_str(&format!("local {}\n\n", forward_decl_names.join(", ")));
-        // Strip `local` from items that define forward-declared names
-        let fwd_set: HashSet<String> = forward_decl_names.iter().cloned().collect();
-        for item in &mut items {
-            let needs_strip: Vec<String> = item.defines.iter()
-                .filter(|n| fwd_set.contains(n.as_str()))
-                .cloned()
-                .collect();
-            for name in needs_strip {
-                item.code = item.code.replacen(&format!("local {} ", name), &format!("{} ", name), 1);
-                item.code = item.code.replacen(&format!("local {}\n", name), &format!("{}\n", name), 1);
-            }
-        }
-    }
+    // No forward declarations needed — all top-level names are globals (nil by default).
 
     for &idx in &ordered {
         let code = &items[idx].code;
@@ -450,92 +358,46 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
     }
 }
 
-/// Collect all top-level local names declared in a file (excluding exports).
-fn collect_top_level_locals(ast: &luao_parser::SourceFile, exported: &HashSet<&str>) -> Vec<String> {
+/// Collect ALL top-level names declared in a file (exported + non-exported + free vars).
+/// Returns names in statement order. Every name gets a 0-indexed suffix for uniqueness.
+fn collect_all_top_level_names(ast: &luao_parser::SourceFile) -> Vec<String> {
     let mut names = Vec::new();
     for stmt in &ast.statements {
-        match stmt {
-            luao_parser::Statement::LocalAssignment(la) => {
-                for name in &la.names {
-                    if !exported.contains(name.name.as_str()) {
-                        names.push(name.name.to_string());
-                    }
-                }
-            }
-            luao_parser::Statement::FunctionDecl(fd) => {
-                if fd.is_local {
-                    if let Some(part) = fd.name.parts.first() {
-                        if !exported.contains(part.name.as_str()) {
-                            names.push(part.name.to_string());
-                        }
-                    }
-                }
-            }
-            luao_parser::Statement::ExportDecl(inner, _) => {
-                // Exports are handled separately; skip their names
-                let _ = inner;
-            }
-            // Classes and enums are always local in transpiled output
-            luao_parser::Statement::ClassDecl(cd) => {
-                if !exported.contains(cd.name.name.as_str()) {
-                    names.push(cd.name.name.to_string());
-                }
-            }
-            luao_parser::Statement::EnumDecl(ed) => {
-                if !exported.contains(ed.name.name.as_str()) {
-                    names.push(ed.name.name.to_string());
-                }
-            }
-            _ => {}
-        }
+        collect_names_from_stmt(stmt, &mut names);
     }
     names
 }
 
-/// Collect free variable references — assignment targets and identifier uses that
-/// are not local declarations and not from imports. These represent user globals.
-fn collect_free_variables(ast: &luao_parser::SourceFile, exported: &HashSet<&str>) -> Vec<String> {
-    let mut names = Vec::new();
-    for stmt in &ast.statements {
-        match stmt {
-            luao_parser::Statement::Assignment(a) => {
-                for target in &a.targets {
-                    if let luao_parser::Expression::Identifier(id) = target {
-                        if !exported.contains(id.name.as_str()) {
-                            names.push(id.name.to_string());
-                        }
-                    }
+/// Extract top-level names from a single statement (handles ExportDecl unwrapping).
+fn collect_names_from_stmt(stmt: &luao_parser::Statement, names: &mut Vec<String>) {
+    match stmt {
+        luao_parser::Statement::LocalAssignment(la) => {
+            for name in &la.names {
+                names.push(name.name.to_string());
+            }
+        }
+        luao_parser::Statement::FunctionDecl(fd) => {
+            if let Some(part) = fd.name.parts.first() {
+                names.push(part.name.to_string());
+            }
+        }
+        luao_parser::Statement::ClassDecl(cd) => {
+            names.push(cd.name.name.to_string());
+        }
+        luao_parser::Statement::EnumDecl(ed) => {
+            names.push(ed.name.name.to_string());
+        }
+        luao_parser::Statement::Assignment(a) => {
+            for target in &a.targets {
+                if let luao_parser::Expression::Identifier(id) = target {
+                    names.push(id.name.to_string());
                 }
             }
-            luao_parser::Statement::ExportDecl(inner, _) => {
-                // Check inside export for any free vars (unlikely but thorough)
-                if let luao_parser::Statement::Assignment(a) = inner.as_ref() {
-                    for target in &a.targets {
-                        if let luao_parser::Expression::Identifier(id) = target {
-                            names.push(id.name.to_string());
-                        }
-                    }
-                }
-            }
-            _ => {}
         }
-    }
-    names
-}
-
-fn get_unique_name(base_name: &str, used_names: &mut HashSet<String>) -> String {
-    if !used_names.contains(base_name) {
-        used_names.insert(base_name.to_string());
-        return base_name.to_string();
-    }
-    let mut counter = 2;
-    loop {
-        let candidate = format!("{}{}", base_name, counter);
-        if !used_names.contains(&candidate) {
-            used_names.insert(candidate.clone());
-            return candidate;
+        luao_parser::Statement::ExportDecl(inner, _) => {
+            collect_names_from_stmt(inner, names);
         }
-        counter += 1;
+        _ => {}
     }
 }
 
@@ -544,6 +406,7 @@ fn gather_modules(
     modules: &mut HashMap<PathBuf, Module>,
     load_order: &mut Vec<PathBuf>,
     visiting: &mut HashSet<PathBuf>,
+    options: &TranspileOptions,
 ) -> Result<(), Vec<String>> {
     let canonical = canonicalize_path(path)?;
 
@@ -565,6 +428,7 @@ fn gather_modules(
     }
 
     let mut resolver = luao_resolver::Resolver::new();
+    resolver.mangle_baseclasses = options.mangle_baseclasses;
     let symbol_table = resolver.resolve(&ast);
     let checker = luao_checker::Checker::new(&symbol_table);
     let diagnostics = checker.check(&ast);
@@ -584,7 +448,7 @@ fn gather_modules(
     // Recursively load dependencies
     for import in &imports {
         let dep_path = resolve_import_path(&canonical, &import.path)?;
-        gather_modules(&dep_path, modules, load_order, visiting)?;
+        gather_modules(&dep_path, modules, load_order, visiting, options)?;
     }
 
     load_order.push(canonical.clone());

@@ -29,6 +29,9 @@ enum Commands {
         /// Use explicit self parameter in method definitions instead of : syntax
         #[arg(long)]
         no_self: bool,
+        /// Mangle built-in base class (Promise, Array) members (off by default)
+        #[arg(long)]
+        mangle_baseclasses: bool,
     },
     Check {
         path: String,
@@ -48,8 +51,9 @@ async fn main() {
             mangle,
             no_bundle,
             no_self,
+            mangle_baseclasses,
         } => {
-            let options = TranspileOptions { minify, mangle, no_self };
+            let options = TranspileOptions { minify, mangle, no_self, mangle_baseclasses };
             build(&path, output.as_deref(), no_bundle, &options);
         }
         Commands::Check { path } => check(&path),
