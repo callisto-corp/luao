@@ -20,8 +20,15 @@ struct ImportInfo {
     path: String,
 }
 
+pub struct BundleResult {
+    pub code: String,
+    /// Mapping of original promoted-global name → minified short name.
+    /// Only populated when minify is enabled.
+    pub globals_rename_map: Vec<(String, String)>,
+}
+
 /// Bundle a Luao project starting from the given entrypoint into a single output.
-pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, Vec<String>> {
+pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<BundleResult, Vec<String>> {
     // Phase 1: Gather all modules recursively
     let mut modules: HashMap<PathBuf, Module> = HashMap::new();
     let mut load_order: Vec<PathBuf> = Vec::new();
@@ -348,13 +355,20 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<String, V
         }
     }
 
+    // Collect all promoted global names (the renamed values like foo0, bar1)
+    let promoted_globals: Vec<String> = file_rename_maps
+        .values()
+        .flat_map(|m| m.values().cloned())
+        .collect();
+
     // Phase 9: Bundle require() calls for files that exist on disk
     let bundle = bundle_requires(&bundle, &entry_canonical)?;
 
     if options.minify {
-        Ok(formatter::minify_lua(&bundle, options.no_self))
+        let (code, globals_rename_map) = formatter::minify_lua_with_globals(&bundle, options.no_self, &promoted_globals);
+        Ok(BundleResult { code, globals_rename_map })
     } else {
-        Ok(formatter::format_lua(&bundle))
+        Ok(BundleResult { code: formatter::format_lua(&bundle), globals_rename_map: Vec::new() })
     }
 }
 

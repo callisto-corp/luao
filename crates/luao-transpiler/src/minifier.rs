@@ -768,3 +768,29 @@ pub fn minify(source: &str, no_self: bool) -> String {
     m.run();
     m.em.out.trim().to_string()
 }
+
+/// Minify with a set of promoted globals (top-level locals that lost their `local`
+/// keyword during bundling). These get pre-bound in the root scope so they are
+/// renamed just like locals.
+///
+/// Returns `(minified_source, rename_map)` where rename_map maps
+/// original promoted global name → short minified name.
+pub fn minify_with_globals(source: &str, no_self: bool, promoted_globals: &[String]) -> (String, Vec<(String, String)>) {
+    let tokens = tokenize(source);
+    let mut m = Minifier::new(tokens, no_self);
+    // Pre-bind promoted globals so they get renamed
+    for name in promoted_globals {
+        m.ren.bind(name);
+    }
+    m.run();
+    // Collect the rename map for promoted globals
+    let mut rename_map = Vec::new();
+    if let Some(root_scope) = m.ren.scopes.first() {
+        for name in promoted_globals {
+            if let Some(short) = root_scope.get(name) {
+                rename_map.push((name.clone(), short.clone()));
+            }
+        }
+    }
+    (m.em.out.trim().to_string(), rename_map)
+}

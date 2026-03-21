@@ -431,6 +431,7 @@ impl<'a> TypeEnv<'a> {
             Expression::SuperAccess(_) => LuaoType::Unknown,
             Expression::YieldExpr(_) => LuaoType::Unknown,
             Expression::AwaitExpr(ae) => self.infer_expr(&ae.expr),
+            Expression::Grouped(inner, _) => self.infer_expr(inner),
         }
     }
 }

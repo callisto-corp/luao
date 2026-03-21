@@ -364,6 +364,8 @@ pub enum Expression {
     YieldExpr(Box<YieldExpr>),
     AwaitExpr(Box<AwaitExpr>),
     ArrayLiteral(Box<ArrayLiteral>),
+    /// Parenthesized expression — preserves explicit `(expr)` from source.
+    Grouped(Box<Expression>, Span),
 }
 
 impl Expression {
@@ -392,6 +394,7 @@ impl Expression {
             Expression::YieldExpr(y) => y.span,
             Expression::AwaitExpr(a) => a.span,
             Expression::ArrayLiteral(a) => a.span,
+            Expression::Grouped(_, s) => *s,
         }
     }
 }

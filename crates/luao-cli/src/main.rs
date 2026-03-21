@@ -32,6 +32,9 @@ enum Commands {
         /// Mangle built-in base class (Promise, Array) members (off by default)
         #[arg(long)]
         mangle_baseclasses: bool,
+        /// Save renamed globals map to a file (JSON: original → minified)
+        #[arg(long)]
+        globals_map: Option<String>,
     },
     Check {
         path: String,
@@ -52,21 +55,22 @@ async fn main() {
             no_bundle,
             no_self,
             mangle_baseclasses,
+            globals_map,
         } => {
             let options = TranspileOptions { minify, mangle, no_self, mangle_baseclasses };
-            build(&path, output.as_deref(), no_bundle, &options);
+            build(&path, output.as_deref(), no_bundle, &options, globals_map.as_deref());
         }
         Commands::Check { path } => check(&path),
         Commands::Lsp => start_lsp().await,
     }
 }
 
-fn build(path: &str, output: Option<&str>, no_bundle: bool, options: &TranspileOptions) {
+fn build(path: &str, output: Option<&str>, no_bundle: bool, options: &TranspileOptions, globals_map: Option<&str>) {
     let input = Path::new(path);
 
     if input.is_dir() {
         let output_dir = output.map(Path::new);
-        build_directory(input, output_dir, no_bundle, options);
+        build_directory(input, output_dir, no_bundle, options, globals_map);
     } else {
         let output_path = match output {
             Some(o) => Path::new(o).to_path_buf(),
@@ -75,7 +79,7 @@ fn build(path: &str, output: Option<&str>, no_bundle: bool, options: &TranspileO
         if no_bundle {
             build_file(input, &output_path, options);
         } else {
-            bundle_file(input, &output_path, options);
+            bundle_file(input, &output_path, options, globals_map);
         }
     }
 }
@@ -86,7 +90,7 @@ fn default_build_output(path: &Path) -> std::path::PathBuf {
     parent.join(format!("{}.out.lua", stem))
 }
 
-fn build_directory(dir: &Path, output_dir: Option<&Path>, no_bundle: bool, options: &TranspileOptions) {
+fn build_directory(dir: &Path, output_dir: Option<&Path>, no_bundle: bool, options: &TranspileOptions, globals_map: Option<&str>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -99,7 +103,7 @@ fn build_directory(dir: &Path, output_dir: Option<&Path>, no_bundle: bool, optio
         let path = entry.path();
         if path.is_dir() {
             let sub_output = output_dir.map(|o| o.join(path.file_name().unwrap()));
-            build_directory(&path, sub_output.as_deref(), no_bundle, options);
+            build_directory(&path, sub_output.as_deref(), no_bundle, options, globals_map);
         } else if path.extension().map_or(false, |ext| ext == "luao") {
             let output_path = match output_dir {
                 Some(o) => {
@@ -111,7 +115,7 @@ fn build_directory(dir: &Path, output_dir: Option<&Path>, no_bundle: bool, optio
             if no_bundle {
                 build_file(&path, &output_path, options);
             } else {
-                bundle_file(&path, &output_path, options);
+                bundle_file(&path, &output_path, options, globals_map);
             }
         }
     }
@@ -147,17 +151,32 @@ fn build_file(path: &Path, output_path: &Path, options: &TranspileOptions) {
     }
 }
 
-fn bundle_file(path: &Path, output_path: &Path, options: &TranspileOptions) {
+fn bundle_file(path: &Path, output_path: &Path, options: &TranspileOptions, globals_map: Option<&str>) {
     match luao_transpiler::bundler::bundle(path, options) {
-        Ok(code) => {
+        Ok(result) => {
             if let Some(parent) = output_path.parent() {
                 if !parent.exists() {
                     let _ = std::fs::create_dir_all(parent);
                 }
             }
-            match std::fs::write(output_path, &code) {
+            match std::fs::write(output_path, &result.code) {
                 Ok(_) => println!("Built: {} -> {}", path.display(), output_path.display()),
                 Err(e) => eprintln!("Failed to write {}: {}", output_path.display(), e),
+            }
+            // Write globals rename map if requested
+            if let Some(map_path) = globals_map {
+                if !result.globals_rename_map.is_empty() {
+                    let mut json = String::from("{\n");
+                    for (i, (original, short)) in result.globals_rename_map.iter().enumerate() {
+                        if i > 0 { json.push_str(",\n"); }
+                        json.push_str(&format!("  \"{}\": \"{}\"", original, short));
+                    }
+                    json.push_str("\n}\n");
+                    match std::fs::write(map_path, &json) {
+                        Ok(_) => println!("Globals map: {}", map_path),
+                        Err(e) => eprintln!("Failed to write globals map {}: {}", map_path, e),
+                    }
+                }
             }
         }
         Err(errors) => {

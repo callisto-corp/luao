@@ -17,18 +17,31 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
             emitter.rename(&id.name)
         }
         Expression::BinaryOp(bin) => {
-            let left = emit_expression(emitter, &bin.left);
-            let right = emit_expression(emitter, &bin.right);
+            let left = emit_bin_child(emitter, &bin.left, &bin.op, true);
+            let right = emit_bin_child(emitter, &bin.right, &bin.op, false);
             let op = binop_to_lua(&bin.op);
-            format!("({} {} {})", left, op, right)
+            format!("{} {} {}", left, op, right)
         }
         Expression::UnaryOp(un) => {
             let operand = emit_expression(emitter, &un.operand);
             let op = unop_to_lua(&un.op);
-            match un.op {
-                UnOp::Not => format!("({} {})", op, operand),
-                _ => format!("({}{})", op, operand),
+            // Only wrap if the operand is a binary op (needs parens for clarity)
+            let needs_parens = matches!(&un.operand, Expression::BinaryOp(_));
+            if needs_parens {
+                match un.op {
+                    UnOp::Not => format!("{} ({})", op, operand),
+                    _ => format!("{}({})", op, operand),
+                }
+            } else {
+                match un.op {
+                    UnOp::Not => format!("{} {}", op, operand),
+                    _ => format!("{}{}", op, operand),
+                }
             }
+        }
+        Expression::Grouped(inner, _) => {
+            let inner_str = emit_expression(emitter, inner);
+            format!("({})", inner_str)
         }
         Expression::FunctionCall(call) => {
             if let Expression::SuperAccess(_) = &call.callee {
@@ -427,6 +440,45 @@ fn emit_args(emitter: &mut Emitter, args: &[Expression]) -> String {
         .map(|a| emit_expression(emitter, a))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Lua operator precedence (higher = binds tighter).
+fn binop_precedence(op: &BinOp) -> u8 {
+    match op {
+        BinOp::Or => 1,
+        BinOp::And => 2,
+        BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge | BinOp::NotEq | BinOp::Eq => 3,
+        BinOp::BitOr => 4,
+        BinOp::BitXor => 5,
+        BinOp::BitAnd => 6,
+        BinOp::ShiftLeft | BinOp::ShiftRight => 7,
+        BinOp::Concat => 8,
+        BinOp::Add | BinOp::Sub => 9,
+        BinOp::Mul | BinOp::Div | BinOp::IntDiv | BinOp::Mod => 10,
+        BinOp::Pow => 12,
+    }
+}
+
+fn is_right_associative(op: &BinOp) -> bool {
+    matches!(op, BinOp::Concat | BinOp::Pow)
+}
+
+/// Emit a child of a binary op, adding parens only when needed for precedence.
+fn emit_bin_child(emitter: &mut Emitter, child: &Expression, parent_op: &BinOp, is_left: bool) -> String {
+    let child_str = emit_expression(emitter, child);
+    if let Expression::BinaryOp(child_bin) = child {
+        let parent_prec = binop_precedence(parent_op);
+        let child_prec = binop_precedence(&child_bin.op);
+        // Need parens if child has lower precedence
+        // or equal precedence on the wrong side of an associative op
+        let needs_parens = child_prec < parent_prec
+            || (child_prec == parent_prec && is_left && is_right_associative(parent_op))
+            || (child_prec == parent_prec && !is_left && !is_right_associative(parent_op));
+        if needs_parens {
+            return format!("({})", child_str);
+        }
+    }
+    child_str
 }
 
 fn binop_to_lua(op: &BinOp) -> &'static str {

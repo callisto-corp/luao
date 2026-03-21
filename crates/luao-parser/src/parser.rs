@@ -1619,10 +1619,13 @@ impl Parser {
                 Ok(Expression::Identifier(id))
             }
             TokenKind::LeftParen => {
+                let start = self.current_span();
                 self.advance();
                 let expr = self.parse_expression()?;
                 self.expect(TokenKind::RightParen)?;
-                Ok(expr)
+                let end = self.previous_span();
+                let span = Span { start: start.start, end: end.end };
+                Ok(Expression::Grouped(Box::new(expr), span))
             }
             TokenKind::Function => {
                 let start = self.current_span();
