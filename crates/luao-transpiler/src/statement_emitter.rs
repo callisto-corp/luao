@@ -1,4 +1,4 @@
-use luao_parser::Statement;
+use luao_parser::{Block, Statement};
 
 use crate::class_emitter;
 use crate::emitter::Emitter;
@@ -120,6 +120,10 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
             let name = emit_function_name(emitter, fd);
             let params = emitter.emit_params(&fd.params);
             let saved_var_types = emitter.local_var_types.clone();
+            let saved_in_switch = emitter.in_switch_case;
+            let saved_switch_ret = emitter.in_switch_return_mode;
+            emitter.in_switch_case = false;
+            emitter.in_switch_return_mode = false;
             // Track parameter types
             track_param_types(emitter, &fd.params);
 
@@ -151,6 +155,8 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
             }
             emitter.writeln("end");
             emitter.local_var_types = saved_var_types;
+            emitter.in_switch_case = saved_in_switch;
+            emitter.in_switch_return_mode = saved_switch_ret;
         }
         Statement::IfStatement(if_stmt) => {
             let cond = emit_expression(emitter, &if_stmt.condition);
@@ -168,18 +174,26 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
             emitter.writeln("end");
         }
         Statement::WhileStatement(ws) => {
+            let saved_switch = emitter.in_switch_case;
+            emitter.in_switch_case = false;
             let cond = emit_expression(emitter, &ws.condition);
             emitter.writeln(&format!("while {} do", cond));
             emitter.emit_block(&ws.body);
             emitter.writeln("end");
+            emitter.in_switch_case = saved_switch;
         }
         Statement::RepeatStatement(rs) => {
+            let saved_switch = emitter.in_switch_case;
+            emitter.in_switch_case = false;
             emitter.writeln("repeat");
             emitter.emit_block(&rs.body);
             let cond = emit_expression(emitter, &rs.condition);
             emitter.writeln(&format!("until {}", cond));
+            emitter.in_switch_case = saved_switch;
         }
         Statement::ForNumeric(f) => {
+            let saved_switch = emitter.in_switch_case;
+            emitter.in_switch_case = false;
             let start = emit_expression(emitter, &f.start);
             let stop = emit_expression(emitter, &f.stop);
             if let Some(step) = &f.step {
@@ -193,8 +207,11 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
             }
             emitter.emit_block(&f.body);
             emitter.writeln("end");
+            emitter.in_switch_case = saved_switch;
         }
         Statement::ForGeneric(f) => {
+            let saved_switch = emitter.in_switch_case;
+            emitter.in_switch_case = false;
             let names: Vec<_> = f.names.iter().map(|n| n.name.to_string()).collect();
             let iters: Vec<_> = f
                 .iterators
@@ -208,32 +225,10 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
             ));
             emitter.emit_block(&f.body);
             emitter.writeln("end");
+            emitter.in_switch_case = saved_switch;
         }
         Statement::SwitchStatement(sw) => {
-            // Emit a local to hold the subject so it's only evaluated once
-            let subject = emit_expression(emitter, &sw.subject);
-            let switch_var = format!("__switch_{}", emitter.next_temp_id());
-            emitter.writeln(&format!("local {} = {}", switch_var, subject));
-            for (i, case) in sw.cases.iter().enumerate() {
-                let conditions: Vec<String> = case
-                    .values
-                    .iter()
-                    .map(|v| {
-                        let val = emit_expression(emitter, v);
-                        format!("{} == {}", switch_var, val)
-                    })
-                    .collect();
-                let keyword = if i == 0 { "if" } else { "elseif" };
-                emitter.writeln(&format!("{} {} then", keyword, conditions.join(" or ")));
-                emitter.emit_block(&case.body);
-            }
-            if let Some(default_block) = &sw.default {
-                emitter.writeln("else");
-                emitter.emit_block(default_block);
-            }
-            if !sw.cases.is_empty() || sw.default.is_some() {
-                emitter.writeln("end");
-            }
+            emit_switch(emitter, sw);
         }
         Statement::DoBlock(block) => {
             emitter.writeln("do");
@@ -241,7 +236,18 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
             emitter.writeln("end");
         }
         Statement::ReturnStatement(ret) => {
-            if ret.values.is_empty() {
+            if emitter.in_switch_return_mode {
+                if ret.values.is_empty() {
+                    emitter.writeln("return true");
+                } else {
+                    let values: Vec<_> = ret
+                        .values
+                        .iter()
+                        .map(|v| emit_expression(emitter, v))
+                        .collect();
+                    emitter.writeln(&format!("return true, {}", values.join(", ")));
+                }
+            } else if ret.values.is_empty() {
                 emitter.writeln("return");
             } else {
                 let values: Vec<_> = ret
@@ -253,7 +259,11 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
             }
         }
         Statement::Break(_) => {
-            emitter.writeln("break");
+            if emitter.in_switch_case {
+                emitter.writeln("return");
+            } else {
+                emitter.writeln("break");
+            }
         }
         Statement::Continue(_) => {
             emitter.writeln("continue");
@@ -419,5 +429,282 @@ fn infer_type_from_expr(emitter: &Emitter, expr: &luao_parser::Expression) -> Op
             None
         }
         _ => None,
+    }
+}
+
+// =============================================================================
+// Switch statement codegen — table-based O(1) dispatch with cascading
+// =============================================================================
+
+/// Check if a block's last statement is `break` (not inside a loop).
+fn case_body_ends_with_break(block: &Block) -> bool {
+    block
+        .statements
+        .last()
+        .map_or(false, |s| matches!(s, Statement::Break(_)))
+}
+
+/// Check if a block's last statement is a `return` (unconditional, top-level).
+fn case_body_ends_with_return(block: &Block) -> bool {
+    block
+        .statements
+        .last()
+        .map_or(false, |s| matches!(s, Statement::ReturnStatement(_)))
+}
+
+/// Check if a block is effectively empty (no statements, or only a break).
+fn case_body_is_empty(block: &Block) -> bool {
+    block.statements.is_empty()
+        || (block.statements.len() == 1 && matches!(block.statements[0], Statement::Break(_)))
+}
+
+/// Recursively check if a block contains any `return` statement.
+/// Skips into if/do/switch blocks but NOT into function bodies.
+fn block_contains_return(block: &Block) -> bool {
+    for stmt in &block.statements {
+        if stmt_contains_return(stmt) {
+            return true;
+        }
+    }
+    false
+}
+
+fn stmt_contains_return(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::ReturnStatement(_) => true,
+        Statement::IfStatement(ifs) => {
+            block_contains_return(&ifs.then_block)
+                || ifs
+                    .elseif_clauses
+                    .iter()
+                    .any(|(_, b)| block_contains_return(b))
+                || ifs
+                    .else_block
+                    .as_ref()
+                    .map_or(false, |b| block_contains_return(b))
+        }
+        Statement::DoBlock(b) => block_contains_return(b),
+        Statement::WhileStatement(w) => block_contains_return(&w.body),
+        Statement::RepeatStatement(r) => block_contains_return(&r.body),
+        Statement::ForNumeric(f) => block_contains_return(&f.body),
+        Statement::ForGeneric(f) => block_contains_return(&f.body),
+        Statement::SwitchStatement(sw) => {
+            sw.cases.iter().any(|c| block_contains_return(&c.body))
+                || sw
+                    .default
+                    .as_ref()
+                    .map_or(false, |b| block_contains_return(b))
+        }
+        // Don't descend into function bodies — return there is local to the fn
+        _ => false,
+    }
+}
+
+/// A group of case values that share a single callback function.
+struct CaseGroup<'a> {
+    values: Vec<String>,
+    body: &'a Block,
+    ends_with_break: bool,
+    ends_with_return: bool,
+    fn_name: String,
+}
+
+fn emit_switch(emitter: &mut Emitter, sw: &luao_parser::SwitchStatement) {
+    // Edge case: completely empty switch
+    if sw.cases.is_empty() && sw.default.is_none() {
+        // Evaluate subject for side effects only
+        let subject = emit_expression(emitter, &sw.subject);
+        emitter.writeln(&format!("local _ = {}", subject));
+        return;
+    }
+
+    // Edge case: only default, no cases
+    if sw.cases.is_empty() {
+        if let Some(ref default_block) = sw.default {
+            let subject = emit_expression(emitter, &sw.subject);
+            emitter.writeln(&format!("local _ = {}", subject));
+            emitter.writeln("do");
+            emitter.emit_block(default_block);
+            emitter.writeln("end");
+        }
+        return;
+    }
+
+    let id = emitter.next_temp_id();
+    let subject = emit_expression(emitter, &sw.subject);
+
+    // Phase 1: Analysis — determine if any case has return
+    let any_return = sw.cases.iter().any(|c| block_contains_return(&c.body))
+        || sw
+            .default
+            .as_ref()
+            .map_or(false, |b| block_contains_return(b));
+
+    // Phase 2: Build case groups — merge empty cases into next non-empty case
+    let mut groups: Vec<CaseGroup> = Vec::new();
+    let mut pending_values: Vec<String> = Vec::new();
+
+    for case in &sw.cases {
+        let case_values: Vec<String> = case
+            .values
+            .iter()
+            .map(|v| emit_expression(emitter, v))
+            .collect();
+
+        if case_body_is_empty(&case.body) {
+            pending_values.extend(case_values);
+        } else {
+            pending_values.extend(case_values);
+            let ends_break = case_body_ends_with_break(&case.body);
+            let ends_return = case_body_ends_with_return(&case.body);
+            let fn_name = format!("__c{}_{}", id, groups.len());
+            groups.push(CaseGroup {
+                values: pending_values.drain(..).collect(),
+                body: &case.body,
+                ends_with_break: ends_break,
+                ends_with_return: ends_return,
+                fn_name,
+            });
+        }
+    }
+
+    // Trailing empty cases (pending_values left over) fall through to default.
+    // They'll be handled: if default exists, they map to default via the `or` fallback.
+    // If no default, they're no-ops (won't be in the lookup table).
+    // But actually, if they should cascade to default, we need them in the map pointing
+    // to default. We'll handle this by creating a default group if needed.
+    let has_trailing_empty = !pending_values.is_empty();
+    let _trailing_values = pending_values;
+
+    // Phase 3: Emit lookup table
+    // Maps case values to 1-based indices into the function array
+    emitter.writeln(&format!("local __s{} = {{", id));
+    emitter.indent();
+    for (gi, group) in groups.iter().enumerate() {
+        let idx = gi + 1; // 1-based for Lua arrays
+        for val in &group.values {
+            emitter.writeln(&format!("[{}] = {},", val, idx));
+        }
+    }
+    emitter.dedent();
+    emitter.writeln("}");
+
+    // Phase 4: Emit case functions in reverse order
+    // Default first (if exists), then last group to first group
+    let default_fn_name = format!("__c{}_default", id);
+
+    if let Some(ref default_block) = sw.default {
+        let saved_switch = emitter.in_switch_case;
+        let saved_ret = emitter.in_switch_return_mode;
+        emitter.in_switch_case = true;
+        emitter.in_switch_return_mode = any_return;
+
+        emitter.writeln(&format!("local function {}()", default_fn_name));
+        emitter.emit_block(default_block);
+        emitter.writeln("end");
+
+        emitter.in_switch_case = saved_switch;
+        emitter.in_switch_return_mode = saved_ret;
+    }
+
+    for gi in (0..groups.len()).rev() {
+        let saved_switch = emitter.in_switch_case;
+        let saved_ret = emitter.in_switch_return_mode;
+        emitter.in_switch_case = true;
+        emitter.in_switch_return_mode = any_return;
+
+        let fn_name = &groups[gi].fn_name;
+        emitter.writeln(&format!("local function {}()", fn_name));
+        emitter.indent();
+
+        // Emit body statements, stripping the trailing break if present
+        let stmts = &groups[gi].body.statements;
+        let stmt_count = stmts.len();
+        for (si, stmt) in stmts.iter().enumerate() {
+            // Skip trailing break — it just means "don't cascade"
+            if si == stmt_count - 1 && matches!(stmt, Statement::Break(_)) {
+                continue;
+            }
+            emitter.emit_statement(stmt);
+        }
+
+        // If no break or return at end, cascade to next callback
+        if !groups[gi].ends_with_break && !groups[gi].ends_with_return {
+            // Determine the next function to call
+            let next_fn = if gi + 1 < groups.len() {
+                Some(groups[gi + 1].fn_name.clone())
+            } else if sw.default.is_some() {
+                Some(default_fn_name.clone())
+            } else {
+                None
+            };
+            if let Some(next) = next_fn {
+                emitter.writeln(&format!("return {}()", next));
+            }
+        }
+
+        emitter.dedent();
+        emitter.writeln("end");
+
+        emitter.in_switch_case = saved_switch;
+        emitter.in_switch_return_mode = saved_ret;
+    }
+
+    // Phase 5: Emit function array
+    let fn_names: Vec<&str> = groups.iter().map(|g| g.fn_name.as_str()).collect();
+    emitter.writeln(&format!(
+        "local __c{} = {{ {} }}",
+        id,
+        fn_names.join(", ")
+    ));
+
+    // Phase 6: Emit dispatch
+    let has_default = sw.default.is_some();
+
+    if any_return {
+        if has_default {
+            emitter.writeln(&format!(
+                "local __ret{id} = {{(__c{id}[__s{id}[{subj}]] or {def})()}}",
+                id = id,
+                subj = subject,
+                def = default_fn_name
+            ));
+        } else {
+            emitter.writeln(&format!(
+                "local __fn{} = __c{}[__s{}[{}]]",
+                id, id, id, subject
+            ));
+            emitter.writeln(&format!("local __ret{id} = {{}}", id = id));
+            emitter.writeln(&format!(
+                "if __fn{id} then __ret{id} = {{__fn{id}()}} end",
+                id = id
+            ));
+        }
+        emitter.writeln(&format!(
+            "if __ret{id}[1] then return select(2, unpack(__ret{id})) end",
+            id = id
+        ));
+    } else {
+        if has_default {
+            // Handle trailing empty cases — they should call default
+            if has_trailing_empty {
+                // We need to check if subject matches trailing values
+                // Since they're not in the lookup table, the `or default` handles it
+                // But wait — ALL non-matched values go to default, so trailing empties
+                // are naturally handled.
+            }
+            emitter.writeln(&format!(
+                "(__c{id}[__s{id}[{subj}]] or {def})()",
+                id = id,
+                subj = subject,
+                def = default_fn_name
+            ));
+        } else {
+            emitter.writeln(&format!(
+                "local __fn{} = __c{}[__s{}[{}]]",
+                id, id, id, subject
+            ));
+            emitter.writeln(&format!("if __fn{id} then __fn{id}() end", id = id));
+        }
     }
 }

@@ -845,4 +845,302 @@ mod tests {
         assert!(out.contains("__luao_yield(Promise.all("));
         assert!(out.contains("__luao_yield(Promise.race("));
     }
+
+    // =========================================================================
+    // Switch statement — table-based dispatch with cascading
+    // =========================================================================
+
+    #[test]
+    fn switch_basic_with_break() {
+        let out = ok(r#"
+            local x = 1
+            switch x do
+                case 1 then
+                    print("one")
+                    break
+                case 2 then
+                    print("two")
+                    break
+                default then
+                    print("other")
+            end
+        "#);
+        // Should have lookup table
+        assert!(out.contains("local __s0 = {"));
+        assert!(out.contains("[1] = 1"));
+        assert!(out.contains("[2] = 2"));
+        // Should have local function declarations
+        assert!(out.contains("local function __c0_"));
+        // Should have dispatch
+        assert!(out.contains("__c0[__s0[x]]"));
+    }
+
+    #[test]
+    fn switch_cascade_no_break() {
+        let out = ok(r#"
+            local x = 1
+            switch x do
+                case 1 then
+                    print("one")
+                case 2 then
+                    print("two")
+                    break
+            end
+        "#);
+        // Case 1 has no break, so it should cascade to case 2
+        assert!(out.contains("return __c0_1()"), "case 0 should cascade to case 1: {}", out);
+    }
+
+    #[test]
+    fn switch_empty_case_merges() {
+        let out = ok(r#"
+            local x = 1
+            switch x do
+                case 1 then
+                case 2 then
+                    print("one or two")
+                    break
+                case 3 then
+                    print("three")
+                    break
+            end
+        "#);
+        // Case 1 is empty, should share index with case 2
+        // Both [1] and [2] should map to the same index
+        assert!(out.contains("[1] = 1"));
+        assert!(out.contains("[2] = 1"));
+        assert!(out.contains("[3] = 2"));
+    }
+
+    #[test]
+    fn switch_multiple_values_per_case() {
+        let out = ok(r#"
+            local x = "a"
+            switch x do
+                case "a", "b" then
+                    print("a or b")
+                    break
+                case "c" then
+                    print("c")
+                    break
+            end
+        "#);
+        assert!(out.contains("[\"a\"] = 1"));
+        assert!(out.contains("[\"b\"] = 1"));
+        assert!(out.contains("[\"c\"] = 2"));
+    }
+
+    #[test]
+    fn switch_with_return_adds_signal() {
+        let out = ok(r#"
+            local x = 1
+            switch x do
+                case 1 then
+                    return 42
+                case 2 then
+                    print("two")
+                    break
+            end
+        "#);
+        // Should have return signal handling
+        assert!(out.contains("return true, 42"), "should emit return true, 42: {}", out);
+        assert!(out.contains("__ret0"), "should have return capture var: {}", out);
+        assert!(out.contains("if __ret0[1] then return select(2, unpack(__ret0)) end"), "should check return signal: {}", out);
+    }
+
+    #[test]
+    fn switch_without_return_no_signal() {
+        let out = ok(r#"
+            local x = 1
+            switch x do
+                case 1 then
+                    print("one")
+                    break
+                case 2 then
+                    print("two")
+                    break
+            end
+        "#);
+        // Should NOT have return signal handling
+        assert!(!out.contains("__ret0"), "should not have return signal: {}", out);
+        assert!(!out.contains("return true"), "should not have return true: {}", out);
+    }
+
+    #[test]
+    fn switch_default_only() {
+        let out = ok(r#"
+            local x = 1
+            switch x do
+                default then
+                    print("default")
+            end
+        "#);
+        // Should emit default body inline in a do block, no table
+        assert!(out.contains("do"));
+        assert!(out.contains("print(\"default\")"));
+        assert!(!out.contains("__s0"), "default-only switch should not have lookup table: {}", out);
+    }
+
+    #[test]
+    fn switch_break_inside_if_becomes_return() {
+        let out = ok(r#"
+            local x = 1
+            switch x do
+                case 1 then
+                    if true then
+                        break
+                    end
+                    print("after")
+                case 2 then
+                    print("two")
+                    break
+            end
+        "#);
+        // The break inside the if should become `return` (exit case function)
+        // The case function for case 1 should contain `return` (from the break in if)
+        assert!(out.contains("local function __c0_0()"));
+    }
+
+    #[test]
+    fn switch_break_in_loop_stays_break() {
+        let out = ok(r#"
+            local x = 1
+            switch x do
+                case 1 then
+                    for i = 1, 10 do
+                        if i == 5 then
+                            break
+                        end
+                    end
+                    break
+            end
+        "#);
+        // The break inside the for loop should stay as `break`
+        // The trailing break just means don't cascade
+        assert!(out.contains("break"), "loop break should remain: {}", out);
+    }
+
+    #[test]
+    fn switch_cascade_to_default() {
+        let out = ok(r#"
+            local x = 1
+            switch x do
+                case 1 then
+                    print("one")
+                case 2 then
+                    print("two")
+                default then
+                    print("default")
+            end
+        "#);
+        // Case 1 cascades to case 2, case 2 cascades to default
+        assert!(out.contains("return __c0_1()"), "case 0 should cascade to case 1: {}", out);
+        assert!(out.contains("return __c0_default()"), "case 1 should cascade to default: {}", out);
+    }
+
+    #[test]
+    fn switch_unique_ids_for_multiple_switches() {
+        let out = ok(r#"
+            local x = 1
+            switch x do
+                case 1 then
+                    print("first switch")
+                    break
+            end
+            switch x do
+                case 2 then
+                    print("second switch")
+                    break
+            end
+        "#);
+        // Should use different IDs
+        assert!(out.contains("__s0"), "first switch should use id 0: {}", out);
+        assert!(out.contains("__s1"), "second switch should use id 1: {}", out);
+    }
+
+    #[test]
+    fn switch_return_in_nested_function_not_transformed() {
+        let out = ok(r#"
+            local x = 1
+            switch x do
+                case 1 then
+                    local f = function()
+                        return 99
+                    end
+                    f()
+                    break
+            end
+        "#);
+        // The return inside the function expr should NOT be transformed to `return true, 99`
+        assert!(out.contains("return 99"), "return in nested fn should not be transformed: {}", out);
+        assert!(!out.contains("return true, 99"), "should not signal from nested fn: {}", out);
+    }
+
+    #[test]
+    fn switch_full_cascade_chain() {
+        // case 1 -> case 2 -> case 3 -> default, all cascading
+        let out = ok(r#"
+            local x = 1
+            switch x do
+                case 1 then
+                    print("a")
+                case 2 then
+                    print("b")
+                case 3 then
+                    print("c")
+                default then
+                    print("d")
+            end
+        "#);
+        assert!(out.contains("return __c0_1()"), "case 0 cascades: {}", out);
+        assert!(out.contains("return __c0_2()"), "case 1 cascades: {}", out);
+        assert!(out.contains("return __c0_default()"), "case 2 cascades to default: {}", out);
+    }
+
+    #[test]
+    fn switch_empty_no_cases_no_default() {
+        let out = ok(r#"
+            local x = 1
+            switch x do
+            end
+        "#);
+        // Should just evaluate subject for side effects
+        assert!(!out.contains("__c0"), "empty switch should have no callbacks: {}", out);
+    }
+
+    #[test]
+    fn switch_multi_value_return() {
+        let out = ok(r#"
+            local x = 1
+            switch x do
+                case 1 then
+                    return 10, 20
+                case 2 then
+                    print("two")
+                    break
+            end
+        "#);
+        // Multi-value return should be signaled
+        assert!(out.contains("return true, 10, 20"), "multi-value return should be signaled: {}", out);
+    }
+
+    #[test]
+    fn switch_nested_switch() {
+        let out = ok(r#"
+            local x = 1
+            local y = 2
+            switch x do
+                case 1 then
+                    switch y do
+                        case 2 then
+                            print("nested")
+                            break
+                    end
+                    break
+            end
+        "#);
+        // Should use different IDs for nested switches
+        assert!(out.contains("__s0"), "outer switch: {}", out);
+        assert!(out.contains("__s1"), "inner switch: {}", out);
+    }
 }

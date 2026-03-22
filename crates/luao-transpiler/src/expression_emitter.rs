@@ -118,7 +118,11 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
                     "coroutine.wrap"
                 };
                 let saved_async_ctx = emitter.in_async_context;
+                let saved_in_switch = emitter.in_switch_case;
+                let saved_switch_ret = emitter.in_switch_return_mode;
                 emitter.in_async_context = fe.is_async;
+                emitter.in_switch_case = false;
+                emitter.in_switch_return_mode = false;
                 let mut result = format!("function({})\n", params);
                 let saved_output = std::mem::take(&mut emitter.output);
                 emitter.indent();
@@ -131,11 +135,17 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
                 emitter.write_indent();
                 result.push_str("end");
                 emitter.in_async_context = saved_async_ctx;
+                emitter.in_switch_case = saved_in_switch;
+                emitter.in_switch_return_mode = saved_switch_ret;
                 emitter.local_var_types = saved_var_types;
                 result
             } else {
                 let saved_async_ctx = emitter.in_async_context;
+                let saved_in_switch = emitter.in_switch_case;
+                let saved_switch_ret = emitter.in_switch_return_mode;
                 emitter.in_async_context = false;
+                emitter.in_switch_case = false;
+                emitter.in_switch_return_mode = false;
                 let mut result = format!("function({})\n", params);
                 let saved_output = std::mem::take(&mut emitter.output);
                 emitter.emit_block(&fe.body);
@@ -144,6 +154,8 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
                 emitter.write_indent();
                 result.push_str("end");
                 emitter.in_async_context = saved_async_ctx;
+                emitter.in_switch_case = saved_in_switch;
+                emitter.in_switch_return_mode = saved_switch_ret;
                 emitter.local_var_types = saved_var_types;
                 result
             }

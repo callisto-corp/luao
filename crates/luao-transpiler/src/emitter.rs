@@ -20,6 +20,10 @@ pub struct Emitter {
     pub(crate) needs_array: bool,
     pub(crate) needs_tuple: bool,
     pub(crate) in_async_context: bool,
+    /// When true, `break` emits `return` (exits switch case function) instead of `break`.
+    pub(crate) in_switch_case: bool,
+    /// When true, `return X` emits `return true, X` (signal to switch dispatch).
+    pub(crate) in_switch_return_mode: bool,
     pub(crate) current_class: Option<String>,
     pub(crate) current_class_parent: Option<String>,
     pub(crate) mangler: Option<Mangler>,
@@ -64,6 +68,8 @@ impl Emitter {
             needs_array: false,
             needs_tuple: false,
             in_async_context: false,
+            in_switch_case: false,
+            in_switch_return_mode: false,
             current_class: None,
             current_class_parent: None,
             mangler,
