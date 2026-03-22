@@ -139,6 +139,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<BundleRes
         needs_abstract_guard: bool,
         needs_async: bool,
         needs_array: bool,
+        needs_tuple: bool,
     }
 
     let mut items: Vec<EmittedItem> = Vec::new();
@@ -225,6 +226,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<BundleRes
             let needs_abstract_guard = emitter.needs_abstract_guard;
             let needs_async = emitter.needs_async;
             let needs_array = emitter.needs_array;
+            let needs_tuple = emitter.needs_tuple;
             // Carry forward type info only for exported names
             let exported_set: std::collections::HashSet<&str> = module.exports.iter().map(|s| s.as_str()).collect();
             for name in &defines {
@@ -251,6 +253,7 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<BundleRes
                 needs_abstract_guard,
                 needs_async,
                 needs_array,
+                needs_tuple,
             });
         }
     }
@@ -312,12 +315,14 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<BundleRes
     let mut runtime_needs_abstract_guard = false;
     let mut runtime_needs_async = false;
     let mut runtime_needs_array = false;
+    let mut runtime_needs_tuple = false;
     for &idx in &ordered {
         if items[idx].needs_instanceof { runtime_needs_instanceof = true; }
         if items[idx].needs_enum_freeze { runtime_needs_enum_freeze = true; }
         if items[idx].needs_abstract_guard { runtime_needs_abstract_guard = true; }
         if items[idx].needs_async { runtime_needs_async = true; }
         if items[idx].needs_array { runtime_needs_array = true; }
+        if items[idx].needs_tuple { runtime_needs_tuple = true; }
     }
 
     let mut bundle = String::new();
@@ -336,6 +341,10 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<BundleRes
     }
     if runtime_needs_async {
         bundle.push_str(crate::runtime::PROMISE_RUNTIME);
+        bundle.push_str("\n\n");
+    }
+    if runtime_needs_tuple {
+        bundle.push_str(crate::runtime::TUPLE_FN);
         bundle.push_str("\n\n");
     }
     if runtime_needs_array {

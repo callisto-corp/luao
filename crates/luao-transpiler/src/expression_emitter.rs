@@ -234,13 +234,14 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
             }
         }
         Expression::TupleLiteral(tl) => {
+            emitter.needs_tuple = true;
             if tl.elements.is_empty() {
-                "{}".to_string()
+                "__luao_tuple({})".to_string()
             } else {
                 let elems: Vec<_> = tl.elements.iter()
                     .map(|e| emit_expression(emitter, e))
                     .collect();
-                format!("{{ {} }}", elems.join(", "))
+                format!("__luao_tuple({{ {} }})", elems.join(", "))
             }
         }
         Expression::ArrayLiteral(al) => {

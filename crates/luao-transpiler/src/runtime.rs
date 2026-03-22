@@ -12,6 +12,18 @@ pub const ENUM_FREEZE_FN: &str = r#"function __luao_enum_freeze(t)
     setmetatable(t, { __newindex = function() error("Cannot modify enum") end })
 end"#;
 
+pub const TUPLE_FN: &str = r#"local __luao_tuple_mt = { __newindex = function() error("Cannot modify tuple") end, __tostring = function(self)
+    local parts = {}
+    for i = 1, #self do
+        local v = self[i]
+        if type(v) == "string" then parts[i] = '"' .. v .. '"' else parts[i] = tostring(v) end
+    end
+    return "(" .. table.concat(parts, ", ") .. ")"
+end }
+local function __luao_tuple(t)
+    return setmetatable(t, __luao_tuple_mt)
+end"#;
+
 pub const ABSTRACT_GUARD_FN: &str = r#"function __luao_abstract_guard(self, class, className)
     if getmetatable(self) == class then
         error("Cannot instantiate abstract class '" .. className .. "'", 2)

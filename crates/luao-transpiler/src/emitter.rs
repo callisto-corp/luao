@@ -18,6 +18,7 @@ pub struct Emitter {
     pub(crate) needs_abstract_guard: bool,
     pub(crate) needs_async: bool,
     pub(crate) needs_array: bool,
+    pub(crate) needs_tuple: bool,
     pub(crate) in_async_context: bool,
     pub(crate) current_class: Option<String>,
     pub(crate) current_class_parent: Option<String>,
@@ -61,6 +62,7 @@ impl Emitter {
             needs_abstract_guard: false,
             needs_async: false,
             needs_array: false,
+            needs_tuple: false,
             in_async_context: false,
             current_class: None,
             current_class_parent: None,
@@ -110,6 +112,11 @@ impl Emitter {
         }
         if self.needs_async {
             preamble.push_str(runtime::PROMISE_RUNTIME);
+            preamble.push('\n');
+            preamble.push('\n');
+        }
+        if self.needs_tuple {
+            preamble.push_str(runtime::TUPLE_FN);
             preamble.push('\n');
             preamble.push('\n');
         }
