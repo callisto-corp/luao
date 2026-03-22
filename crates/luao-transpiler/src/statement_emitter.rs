@@ -209,6 +209,32 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
             emitter.emit_block(&f.body);
             emitter.writeln("end");
         }
+        Statement::SwitchStatement(sw) => {
+            // Emit a local to hold the subject so it's only evaluated once
+            let subject = emit_expression(emitter, &sw.subject);
+            let switch_var = format!("__switch_{}", emitter.next_temp_id());
+            emitter.writeln(&format!("local {} = {}", switch_var, subject));
+            for (i, case) in sw.cases.iter().enumerate() {
+                let conditions: Vec<String> = case
+                    .values
+                    .iter()
+                    .map(|v| {
+                        let val = emit_expression(emitter, v);
+                        format!("{} == {}", switch_var, val)
+                    })
+                    .collect();
+                let keyword = if i == 0 { "if" } else { "elseif" };
+                emitter.writeln(&format!("{} {} then", keyword, conditions.join(" or ")));
+                emitter.emit_block(&case.body);
+            }
+            if let Some(default_block) = &sw.default {
+                emitter.writeln("else");
+                emitter.emit_block(default_block);
+            }
+            if !sw.cases.is_empty() || sw.default.is_some() {
+                emitter.writeln("end");
+            }
+        }
         Statement::DoBlock(block) => {
             emitter.writeln("do");
             emitter.emit_block(block);

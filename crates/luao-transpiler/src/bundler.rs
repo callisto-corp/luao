@@ -782,6 +782,11 @@ fn collect_expr_idents(expr: &luao_parser::Expression, out: &mut HashSet<String>
                 collect_expr_idents(elem, out);
             }
         }
+        TupleLiteral(tl) => {
+            for elem in &tl.elements {
+                collect_expr_idents(elem, out);
+            }
+        }
         _ => {}
     }
 }

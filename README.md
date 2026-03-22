@@ -1,6 +1,6 @@
 # Luao
 
-A superset of Lua with classes, interfaces, enums, generators, async/await, and more — all transpiling down to plain Lua tables, metatables, and coroutines.
+A superset of Lua with classes, interfaces, enums, generators, async/await, switch statements, tuples, void operator, and more — all transpiling down to plain Lua tables, metatables, and coroutines.
 
 ```lua
 class Animal
@@ -429,6 +429,98 @@ sealed class Config
 end
 ```
 
+### Switch Statement
+
+Pattern match on a value. Supports multiple values per case.
+
+```lua
+local command = "help"
+
+switch command do
+    case "greet" then
+        print("Hello!")
+    case "help", "?" then
+        print("Available commands: greet, help")
+    default then
+        print("Unknown command")
+end
+```
+
+Transpiles to an `if/elseif/else` chain with a temp variable so the subject is only evaluated once:
+
+```lua
+local __switch_0 = command
+if __switch_0 == "greet" then
+    print("Hello!")
+elseif __switch_0 == "help" or __switch_0 == "?" then
+    print("Available commands: greet, help")
+else
+    print("Unknown command")
+end
+```
+
+Works with enums, numbers, strings, or any expression.
+
+### Void Operator
+
+Evaluates an expression for its side effects and returns `nil`. Just like JavaScript's `void`.
+
+```lua
+local result = void someFunction()
+print(result)  -- nil
+```
+
+Transpiles to:
+
+```lua
+local result = (function() someFunction() return nil end)()
+```
+
+Also works as a return type annotation (equivalent to `nil`):
+
+```lua
+public function log(msg: string): void
+    print(msg)
+end
+```
+
+### Tuples
+
+Lightweight fixed-size sequences. Use parentheses with commas.
+
+```lua
+local point = (10, 20)
+local rgb = (255, 128, 0)
+local single = (42,)          -- trailing comma for single-element tuple
+local empty = ()
+local nested = ((1, 2), (3, 4))
+```
+
+Access by index (1-based, like Lua):
+
+```lua
+print(point[1])  -- 10
+print(point[2])  -- 20
+```
+
+Unpack into multiple variables:
+
+```lua
+local x, y = table.unpack(point)
+```
+
+Transpiles to plain Lua tables:
+
+```lua
+local point = { 10, 20 }
+local rgb = { 255, 128, 0 }
+local single = { 42 }
+local empty = {}
+local nested = { { 1, 2 }, { 3, 4 } }
+```
+
+Also supported as a type annotation: `(number, string, boolean)`.
+
 ### Property Getters/Setters
 
 ```lua
@@ -513,7 +605,7 @@ Enforced at compile time. Private fields get a `_` prefix in the output as a saf
 | `luao-lexer` | Tokenizer for Lua + Luao keywords |
 | `luao-parser` | Recursive descent parser with Pratt expression parsing |
 | `luao-resolver` | Scope tracking, symbol table construction |
-| `luao-checker` | Type checking, access modifiers, abstract/sealed/interface/readonly/async/generator enforcement |
+| `luao-checker` | Type checking, access modifiers, abstract/sealed/interface/readonly/async/generator/void enforcement |
 | `luao-transpiler` | Code generation using `full_moon` for output formatting |
 | `luao-lsp` | Language server with `tower-lsp` |
 | `luao-cli` | CLI: `build`, `check`, `lsp` subcommands |

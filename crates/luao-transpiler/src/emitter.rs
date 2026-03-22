@@ -46,6 +46,8 @@ pub struct Emitter {
     pub(crate) table_target_type: Option<String>,
     /// When true, all top-level declarations omit the `local` keyword (bundled globals mode).
     pub(crate) bundle_globals_mode: bool,
+    /// Counter for generating unique temporary variable names.
+    pub(crate) temp_id: usize,
 }
 
 impl Emitter {
@@ -73,7 +75,14 @@ impl Emitter {
             local_var_types: HashMap::new(),
             table_target_type: None,
             bundle_globals_mode: false,
+            temp_id: 0,
         }
+    }
+
+    pub fn next_temp_id(&mut self) -> usize {
+        let id = self.temp_id;
+        self.temp_id += 1;
+        id
     }
 
     pub fn emit(&mut self, file: &SourceFile) {

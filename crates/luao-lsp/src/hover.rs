@@ -155,6 +155,10 @@ fn keyword_description(word: &str) -> Option<&'static str> {
         "goto" => Some("Jumps to a label."),
         "get" => Some("Defines a property getter."),
         "set" => Some("Defines a property setter."),
+        "switch" => Some("Begins a switch statement. Syntax: switch expr do case val then ... end"),
+        "case" => Some("Defines a case branch in a switch statement. Supports multiple comma-separated values."),
+        "default" => Some("Defines the default branch in a switch statement."),
+        "void" => Some("Unary operator that evaluates an expression and returns nil. Also used as a return type annotation."),
         _ => None,
     }
 }

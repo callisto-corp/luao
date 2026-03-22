@@ -125,7 +125,7 @@
       "patterns": [
         {
           "comment": "Keywords that are always keywords regardless of context",
-          "match": "\\b(continue|instanceof|super)\\b",
+          "match": "\\b(continue|instanceof|super|void)\\b",
           "name": "keyword.other.luao"
         },
         {
@@ -179,7 +179,7 @@
       "patterns": [
         {
           "name": "keyword.control.luao",
-          "match": "\\b(and|break|do|else|elseif|end|for|if|in|not|or|repeat|return|then|until|while)\\b"
+          "match": "\\b(and|break|case|default|do|else|elseif|end|for|if|in|not|or|repeat|return|switch|then|until|while)\\b"
         },
         {
           "name": "keyword.declaration.luao",

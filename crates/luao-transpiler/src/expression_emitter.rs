@@ -23,6 +23,11 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
             format!("{} {} {}", left, op, right)
         }
         Expression::UnaryOp(un) => {
+            if un.op == UnOp::Void {
+                // void evaluates the expression for side effects and returns nil
+                let operand = emit_expression(emitter, &un.operand);
+                return format!("(function() {} return nil end)()", operand);
+            }
             let operand = emit_expression(emitter, &un.operand);
             let op = unop_to_lua(&un.op);
             // Only wrap if the operand is a binary op (needs parens for clarity)
@@ -226,6 +231,16 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
                 format!("__luao_yield({})", expr)
             } else {
                 format!("({}):expect()", expr)
+            }
+        }
+        Expression::TupleLiteral(tl) => {
+            if tl.elements.is_empty() {
+                "{}".to_string()
+            } else {
+                let elems: Vec<_> = tl.elements.iter()
+                    .map(|e| emit_expression(emitter, e))
+                    .collect();
+                format!("{{ {} }}", elems.join(", "))
             }
         }
         Expression::ArrayLiteral(al) => {
@@ -513,5 +528,6 @@ fn unop_to_lua(op: &UnOp) -> &'static str {
         UnOp::Not => "not",
         UnOp::Len => "#",
         UnOp::BitNot => "~",
+        UnOp::Void => "void", // handled specially in emit_expression
     }
 }

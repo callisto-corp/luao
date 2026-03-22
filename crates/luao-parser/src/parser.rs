@@ -56,6 +56,7 @@ impl Parser {
                 | TokenKind::Repeat
                 | TokenKind::Return
                 | TokenKind::Do
+                | TokenKind::Switch
                 | TokenKind::Abstract
                 | TokenKind::Sealed => return,
                 _ => {
@@ -151,6 +152,7 @@ impl Parser {
             TokenKind::While => self.parse_while_statement(),
             TokenKind::Repeat => self.parse_repeat_statement(),
             TokenKind::For => self.parse_for_statement(),
+            TokenKind::Switch => self.parse_switch_statement(),
             TokenKind::Do => self.parse_do_block(),
             TokenKind::Return => self.parse_return_statement(),
             TokenKind::Break => {
@@ -1110,6 +1112,53 @@ impl Parser {
         }
     }
 
+    fn parse_switch_statement(&mut self) -> ParseResult<Statement> {
+        let start = self.current_span();
+        self.expect(TokenKind::Switch)?;
+        let subject = self.parse_expression()?;
+        self.expect(TokenKind::Do)?;
+
+        let mut cases = Vec::new();
+        let mut default = None;
+
+        loop {
+            if self.check(TokenKind::Case) {
+                let case_start = self.current_span();
+                self.advance();
+                // Parse one or more comma-separated values
+                let mut values = vec![self.parse_expression()?];
+                while self.check(TokenKind::Comma) {
+                    self.advance();
+                    values.push(self.parse_expression()?);
+                }
+                self.expect(TokenKind::Then)?;
+                let body = self.parse_block()?;
+                let case_end = self.previous_span();
+                cases.push(SwitchCase {
+                    values,
+                    body,
+                    span: case_start.merge(case_end),
+                });
+            } else if self.check(TokenKind::Default) {
+                self.advance();
+                self.expect(TokenKind::Then)?;
+                default = Some(self.parse_block()?);
+            } else {
+                break;
+            }
+        }
+
+        self.expect(TokenKind::End)?;
+        let end = self.previous_span();
+
+        Ok(Statement::SwitchStatement(SwitchStatement {
+            subject,
+            cases,
+            default,
+            span: start.merge(end),
+        }))
+    }
+
     fn parse_do_block(&mut self) -> ParseResult<Statement> {
         self.expect(TokenKind::Do)?;
         let block = self.parse_block()?;
@@ -1218,6 +1267,8 @@ impl Parser {
                 | TokenKind::Else
                 | TokenKind::ElseIf
                 | TokenKind::Until
+                | TokenKind::Case
+                | TokenKind::Default
                 | TokenKind::Eof
         )
     }
@@ -1460,6 +1511,7 @@ impl Parser {
             TokenKind::Hash => Some(UnOp::Len),
             TokenKind::Minus => Some(UnOp::Neg),
             TokenKind::Tilde => Some(UnOp::BitNot),
+            TokenKind::Void => Some(UnOp::Void),
             _ => None,
         };
 
@@ -1621,11 +1673,39 @@ impl Parser {
             TokenKind::LeftParen => {
                 let start = self.current_span();
                 self.advance();
+                // Empty tuple: ()
+                if self.check(TokenKind::RightParen) {
+                    self.advance();
+                    let end = self.previous_span();
+                    return Ok(Expression::TupleLiteral(Box::new(TupleLiteral {
+                        elements: Vec::new(),
+                        span: start.merge(end),
+                    })));
+                }
                 let expr = self.parse_expression()?;
-                self.expect(TokenKind::RightParen)?;
-                let end = self.previous_span();
-                let span = Span { start: start.start, end: end.end };
-                Ok(Expression::Grouped(Box::new(expr), span))
+                if self.check(TokenKind::Comma) {
+                    // Tuple: (expr, ...) or (expr,)
+                    let mut elements = vec![expr];
+                    while self.check(TokenKind::Comma) {
+                        self.advance();
+                        if self.check(TokenKind::RightParen) {
+                            break; // trailing comma
+                        }
+                        elements.push(self.parse_expression()?);
+                    }
+                    self.expect(TokenKind::RightParen)?;
+                    let end = self.previous_span();
+                    Ok(Expression::TupleLiteral(Box::new(TupleLiteral {
+                        elements,
+                        span: start.merge(end),
+                    })))
+                } else {
+                    // Grouped expression: (expr)
+                    self.expect(TokenKind::RightParen)?;
+                    let end = self.previous_span();
+                    let span = Span { start: start.start, end: end.end };
+                    Ok(Expression::Grouped(Box::new(expr), span))
+                }
             }
             TokenKind::Function => {
                 let start = self.current_span();
@@ -2058,7 +2138,7 @@ impl Parser {
                     }
                 }
             }
-            TokenKind::Nil => {
+            TokenKind::Nil | TokenKind::Void => {
                 self.advance();
                 TypeAnnotation {
                     kind: TypeKind::Nil,

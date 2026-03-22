@@ -61,6 +61,10 @@ pub enum TokenKind {
     Await,
     Yield,
     Generator,
+    Switch,
+    Case,
+    Default,
+    Void,
 
     Identifier,
     Number,
@@ -172,6 +176,10 @@ impl TokenKind {
             "await" => Some(TokenKind::Await),
             "yield" => Some(TokenKind::Yield),
             "generator" => Some(TokenKind::Generator),
+            "switch" => Some(TokenKind::Switch),
+            "case" => Some(TokenKind::Case),
+            "default" => Some(TokenKind::Default),
+            "void" => Some(TokenKind::Void),
             _ => None,
         }
     }
@@ -209,6 +217,10 @@ impl TokenKind {
                 | TokenKind::Await
                 | TokenKind::Yield
                 | TokenKind::Generator
+                | TokenKind::Switch
+                | TokenKind::Case
+                | TokenKind::Default
+                | TokenKind::Void
         )
     }
 
@@ -265,6 +277,10 @@ impl TokenKind {
                 | TokenKind::Await
                 | TokenKind::Yield
                 | TokenKind::Generator
+                | TokenKind::Switch
+                | TokenKind::Case
+                | TokenKind::Default
+                | TokenKind::Void
         )
     }
 }
@@ -322,6 +338,10 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Await => write!(f, "await"),
             TokenKind::Yield => write!(f, "yield"),
             TokenKind::Generator => write!(f, "generator"),
+            TokenKind::Switch => write!(f, "switch"),
+            TokenKind::Case => write!(f, "case"),
+            TokenKind::Default => write!(f, "default"),
+            TokenKind::Void => write!(f, "void"),
             TokenKind::Identifier => write!(f, "identifier"),
             TokenKind::Number => write!(f, "number"),
             TokenKind::StringLiteral => write!(f, "string"),

@@ -31,6 +31,7 @@ pub enum Statement {
     ForNumeric(ForNumericStatement),
     ForGeneric(ForGenericStatement),
     DoBlock(Block),
+    SwitchStatement(SwitchStatement),
     ReturnStatement(ReturnStatement),
     Break(Span),
     Continue(Span),
@@ -334,6 +335,21 @@ pub struct ForGenericStatement {
 }
 
 #[derive(Debug, Clone)]
+pub struct SwitchStatement {
+    pub subject: Expression,
+    pub cases: Vec<SwitchCase>,
+    pub default: Option<Block>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct SwitchCase {
+    pub values: Vec<Expression>,
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct ReturnStatement {
     pub values: Vec<Expression>,
     pub span: Span,
@@ -364,6 +380,7 @@ pub enum Expression {
     YieldExpr(Box<YieldExpr>),
     AwaitExpr(Box<AwaitExpr>),
     ArrayLiteral(Box<ArrayLiteral>),
+    TupleLiteral(Box<TupleLiteral>),
     /// Parenthesized expression — preserves explicit `(expr)` from source.
     Grouped(Box<Expression>, Span),
 }
@@ -394,6 +411,7 @@ impl Expression {
             Expression::YieldExpr(y) => y.span,
             Expression::AwaitExpr(a) => a.span,
             Expression::ArrayLiteral(a) => a.span,
+            Expression::TupleLiteral(t) => t.span,
             Expression::Grouped(_, s) => *s,
         }
     }
@@ -445,6 +463,7 @@ pub enum UnOp {
     Not,
     Len,
     BitNot,
+    Void,
 }
 
 #[derive(Debug, Clone)]
@@ -549,6 +568,12 @@ pub struct AwaitExpr {
 
 #[derive(Debug, Clone)]
 pub struct ArrayLiteral {
+    pub elements: Vec<Expression>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct TupleLiteral {
     pub elements: Vec<Expression>,
     pub span: Span,
 }

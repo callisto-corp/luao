@@ -1,0 +1,112 @@
+-- ============================================================
+-- Switch Statement & Void Operator Demo
+-- ============================================================
+
+-- Basic switch statement
+local command = "greet"
+
+switch command do
+    case "greet" then
+        print("Hello, world!")
+    case "farewell" then
+        print("Goodbye!")
+    case "help", "?" then
+        print("Available commands: greet, farewell, help")
+    default then
+        print("Unknown command: " .. command)
+end
+
+-- Switch on numbers
+local statusCode = 404
+
+switch statusCode do
+    case 200 then
+        print("OK")
+    case 301, 302 then
+        print("Redirect")
+    case 404 then
+        print("Not Found")
+    case 500, 502, 503 then
+        print("Server Error")
+    default then
+        print("Status: " .. statusCode)
+end
+
+-- Switch with enums
+enum Season
+    Spring = 1
+    Summer = 2
+    Fall = 3
+    Winter = 4
+end
+
+local current = Season.Fall
+
+switch current do
+    case Season.Spring then
+        print("Flowers are blooming")
+    case Season.Summer then
+        print("Time for the beach")
+    case Season.Fall then
+        print("Leaves are changing")
+    case Season.Winter then
+        print("Bundle up!")
+end
+
+-- Switch inside a class
+class HttpRouter
+    private routes: table
+
+    new()
+        self.routes = {}
+    end
+
+    public function handle(method: string, path: string): string
+        switch method do
+            case "GET" then
+                return "Reading " .. path
+            case "POST" then
+                return "Creating at " .. path
+            case "PUT", "PATCH" then
+                return "Updating " .. path
+            case "DELETE" then
+                return "Deleting " .. path
+            default then
+                return "405 Method Not Allowed"
+        end
+        return ""
+    end
+end
+
+local router = new HttpRouter()
+print(router:handle("GET", "/users"))
+print(router:handle("POST", "/users"))
+print(router:handle("PUT", "/users/1"))
+print(router:handle("DELETE", "/users/1"))
+print(router:handle("TRACE", "/debug"))
+
+-- ============================================================
+-- Void operator
+-- ============================================================
+
+-- void discards a value, always returns nil
+local result = void print("side effect runs!")
+print("result is nil: " .. tostring(result))
+
+-- void with function calls — evaluate for side effects, discard return
+function getAnswer(): number
+    return 42
+end
+
+local nothing = void getAnswer()
+print("void getAnswer() = " .. tostring(nothing))
+
+-- void as type annotation on functions
+class Logger
+    public function log(msg: string): void
+        print("[LOG] " .. msg)
+    end
+end
+
+local logger = new Logger()
+logger:log("Switch and void are working!")

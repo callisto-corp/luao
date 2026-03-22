@@ -404,6 +404,7 @@ impl<'a> TypeEnv<'a> {
                 match uo.op {
                     UnOp::Neg | UnOp::Len | UnOp::BitNot => LuaoType::Number,
                     UnOp::Not => LuaoType::Boolean,
+                    UnOp::Void => LuaoType::Nil,
                 }
             }
             Expression::CastExpr(ce) => {
@@ -423,6 +424,7 @@ impl<'a> TypeEnv<'a> {
             }
             Expression::TableConstructor(_) => LuaoType::Unknown,
             Expression::ArrayLiteral(_) => LuaoType::Unknown,
+            Expression::TupleLiteral(_) => LuaoType::Unknown,
             Expression::IndexAccess(_) => LuaoType::Unknown,
             Expression::IfExpression(ie) => {
                 self.infer_expr(&ie.then_expr)
@@ -1924,7 +1926,7 @@ fn check_types_in_expr(
                         ));
                     }
                 }
-                UnOp::Not => {} // `not` works on any type
+                UnOp::Not | UnOp::Void => {} // `not` and `void` work on any type
             }
             check_types_in_expr(&uo.operand, env, diagnostics);
         }
