@@ -85,23 +85,7 @@ print(router:handle("PUT", "/users/1"))
 print(router:handle("DELETE", "/users/1"))
 print(router:handle("TRACE", "/debug"))
 
--- ============================================================
--- Void operator
--- ============================================================
-
--- void discards a value, always returns nil
-local result = void print("side effect runs!")
-print("result is nil: " .. tostring(result))
-
--- void with function calls — evaluate for side effects, discard return
-function getAnswer(): number
-    return 42
-end
-
-local nothing = void getAnswer()
-print("void getAnswer() = " .. tostring(nothing))
-
--- void as type annotation on functions
+-- void as type annotation on functions (void is a type, not a keyword)
 class Logger
     public function log(msg: string): void
         print("[LOG] " .. msg)
@@ -109,4 +93,4 @@ class Logger
 end
 
 local logger = new Logger()
-logger:log("Switch and void are working!")
+logger:log("Switch is working!")

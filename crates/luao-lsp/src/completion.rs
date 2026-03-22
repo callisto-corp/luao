@@ -7,7 +7,7 @@ const LUAO_KEYWORDS: &[&str] = &[
     "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while", "class",
     "extends", "implements", "interface", "abstract", "static", "public", "private", "protected",
     "readonly", "super", "new", "enum", "sealed", "get", "set", "override", "instanceof",
-    "switch", "case", "default", "void",
+    "switch", "case", "default",
 ];
 
 pub async fn complete(doc: &DocumentState, position: Position) -> Vec<CompletionItem> {
@@ -77,7 +77,7 @@ pub async fn complete(doc: &DocumentState, position: Position) -> Vec<Completion
                         ..Default::default()
                     });
                 }
-                for builtin in &["number", "string", "boolean", "nil", "any", "void"] {
+                for builtin in &["number", "string", "boolean", "nil", "any"] {
                     items.push(CompletionItem {
                         label: builtin.to_string(),
                         kind: Some(CompletionItemKind::KEYWORD),

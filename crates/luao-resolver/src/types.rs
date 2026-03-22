@@ -7,7 +7,6 @@ pub enum LuaoType {
     Boolean,
     Nil,
     Any,
-    Void,
     Table(Box<LuaoType>, Box<LuaoType>),
     Array(Box<LuaoType>),
     Function(Vec<LuaoType>, Box<LuaoType>),

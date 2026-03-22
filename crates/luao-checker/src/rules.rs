@@ -28,7 +28,7 @@ fn resolve_type_kind(kind: &TypeKind, symbols: &SymbolTable) -> LuaoType {
                 "boolean" => LuaoType::Boolean,
                 "nil" => LuaoType::Nil,
                 "any" => LuaoType::Any,
-                "void" => LuaoType::Void,
+                "void" => LuaoType::Nil,
                 "table" if type_args.len() == 2 => {
                     let k = resolve_ast_type(&type_args[0], symbols);
                     let v = resolve_ast_type(&type_args[1], symbols);
@@ -213,7 +213,6 @@ fn type_name(ty: &LuaoType, symbols: &SymbolTable) -> String {
         LuaoType::Boolean => "boolean".to_string(),
         LuaoType::Nil => "nil".to_string(),
         LuaoType::Any => "any".to_string(),
-        LuaoType::Void => "void".to_string(),
         LuaoType::Table(k, v) => format!("Table<{}, {}>", type_name(k, symbols), type_name(v, symbols)),
         LuaoType::Array(inner) => format!("{}[]", type_name(inner, symbols)),
         LuaoType::Function(params, ret) => {
@@ -404,7 +403,6 @@ impl<'a> TypeEnv<'a> {
                 match uo.op {
                     UnOp::Neg | UnOp::Len | UnOp::BitNot => LuaoType::Number,
                     UnOp::Not => LuaoType::Boolean,
-                    UnOp::Void => LuaoType::Nil,
                 }
             }
             Expression::CastExpr(ce) => {
@@ -1652,7 +1650,7 @@ fn check_types_in_statement(
                 if !r.values.is_empty() {
                     let actual_ty = env.infer_expr(&r.values[0]);
                     if !matches!(actual_ty, LuaoType::Unknown) &&
-                       !matches!(expected_ret, LuaoType::Unknown | LuaoType::Void) &&
+                       !matches!(expected_ret, LuaoType::Unknown | LuaoType::Nil) &&
                        !is_assignable(&actual_ty, expected_ret, env.symbols)
                     {
                         diagnostics.push(Diagnostic::error(
@@ -1665,7 +1663,7 @@ fn check_types_in_statement(
                             "E018",
                         ));
                     }
-                } else if !matches!(expected_ret, LuaoType::Void | LuaoType::Unknown) {
+                } else if !matches!(expected_ret, LuaoType::Nil | LuaoType::Unknown) {
                     // Returning nothing when a type is expected (only warn, not error — could be early return)
                 }
             }
@@ -1681,7 +1679,7 @@ fn check_types_in_statement(
                         let mut child = env.child();
                         child.current_class = Some(class_name.clone());
                         child.in_constructor = true;
-                        child.return_type = Some(LuaoType::Void);
+                        child.return_type = Some(LuaoType::Nil);
                         for param in &ctor.params {
                             if let Some(ref ta) = param.type_annotation {
                                 child.locals.insert(
@@ -1926,7 +1924,7 @@ fn check_types_in_expr(
                         ));
                     }
                 }
-                UnOp::Not | UnOp::Void => {} // `not` and `void` work on any type
+                UnOp::Not => {} // `not` works on any type
             }
             check_types_in_expr(&uo.operand, env, diagnostics);
         }

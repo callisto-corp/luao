@@ -113,7 +113,7 @@ impl Resolver {
             MethodSymbol {
                 name: "cancel".to_string(),
                 params: vec![],
-                return_type: LuaoType::Void,
+                return_type: LuaoType::Nil,
                 access: AccessModifier::Public,
                 is_static: false, is_abstract: false, is_override: false,
                 is_extern, is_async: false, is_generator: false,
@@ -282,7 +282,7 @@ impl Resolver {
                         .return_type
                         .as_ref()
                         .map(|ta| self.resolve_type(ta))
-                        .unwrap_or(LuaoType::Void);
+                        .unwrap_or(LuaoType::Nil);
                     methods.push(MethodSymbol {
                         name: m.name.name.to_string(),
                         params,
@@ -312,7 +312,7 @@ impl Resolver {
                     methods.push(MethodSymbol {
                         name: "constructor".to_string(),
                         params,
-                        return_type: LuaoType::Void,
+                        return_type: LuaoType::Nil,
                         access: c.access,
                         is_static: false,
                         is_abstract: false,
@@ -378,7 +378,7 @@ impl Resolver {
                         .return_type
                         .as_ref()
                         .map(|ta| self.resolve_type(ta))
-                        .unwrap_or(LuaoType::Void);
+                        .unwrap_or(LuaoType::Nil);
                     methods.push(MethodSymbol {
                         name: m.name.name.to_string(),
                         params,
@@ -460,7 +460,7 @@ impl Resolver {
                     "number" => LuaoType::Number,
                     "string" => LuaoType::String,
                     "boolean" => LuaoType::Boolean,
-                    "void" => LuaoType::Void,
+                    "void" => LuaoType::Nil,
                     "table" if type_args.len() == 2 => {
                         let key = self.resolve_type(&type_args[0]);
                         let val = self.resolve_type(&type_args[1]);

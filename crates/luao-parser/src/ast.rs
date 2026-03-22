@@ -463,7 +463,6 @@ pub enum UnOp {
     Not,
     Len,
     BitNot,
-    Void,
 }
 
 #[derive(Debug, Clone)]

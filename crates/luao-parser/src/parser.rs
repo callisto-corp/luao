@@ -1511,7 +1511,6 @@ impl Parser {
             TokenKind::Hash => Some(UnOp::Len),
             TokenKind::Minus => Some(UnOp::Neg),
             TokenKind::Tilde => Some(UnOp::BitNot),
-            TokenKind::Void => Some(UnOp::Void),
             _ => None,
         };
 
@@ -2138,7 +2137,7 @@ impl Parser {
                     }
                 }
             }
-            TokenKind::Nil | TokenKind::Void => {
+            TokenKind::Nil => {
                 self.advance();
                 TypeAnnotation {
                     kind: TypeKind::Nil,

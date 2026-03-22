@@ -64,8 +64,6 @@ pub enum TokenKind {
     Switch,
     Case,
     Default,
-    Void,
-
     Identifier,
     Number,
     StringLiteral,
@@ -179,7 +177,6 @@ impl TokenKind {
             "switch" => Some(TokenKind::Switch),
             "case" => Some(TokenKind::Case),
             "default" => Some(TokenKind::Default),
-            "void" => Some(TokenKind::Void),
             _ => None,
         }
     }
@@ -220,7 +217,6 @@ impl TokenKind {
                 | TokenKind::Switch
                 | TokenKind::Case
                 | TokenKind::Default
-                | TokenKind::Void
         )
     }
 
@@ -280,7 +276,6 @@ impl TokenKind {
                 | TokenKind::Switch
                 | TokenKind::Case
                 | TokenKind::Default
-                | TokenKind::Void
         )
     }
 }
@@ -341,7 +336,6 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Switch => write!(f, "switch"),
             TokenKind::Case => write!(f, "case"),
             TokenKind::Default => write!(f, "default"),
-            TokenKind::Void => write!(f, "void"),
             TokenKind::Identifier => write!(f, "identifier"),
             TokenKind::Number => write!(f, "number"),
             TokenKind::StringLiteral => write!(f, "string"),
