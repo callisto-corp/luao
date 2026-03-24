@@ -95,7 +95,7 @@ pub fn emit_expression(emitter: &mut Emitter, expr: &Expression) -> String {
                 if let Some(ref ta) = param.type_annotation {
                     if let luao_parser::TypeKind::Named(ref type_name, _) = ta.kind {
                         let tn = type_name.name.to_string();
-                        if emitter.is_class(&tn) {
+                        if emitter.is_type(&tn) {
                             emitter.local_var_types.insert(param.name.name.to_string(), tn);
                         }
                     }
@@ -333,42 +333,12 @@ fn maybe_mangle_access(emitter: &mut Emitter, object: &Expression, member_name: 
     // self.field:method() or var.field:method() — resolve field type from symbol table
     if let Expression::FieldAccess(fa) = object {
         if let Some(owner_type) = resolve_expression_type(emitter, &fa.object) {
-            // Look up the field type to find which class to mangle against
-            let field_class = {
-                let field_name = fa.field.name.as_str();
-                let mut result = None;
-                if let Some(class) = emitter.symbol_table.classes.get(&owner_type) {
-                    for field in &class.fields {
-                        if field.name == field_name {
-                            match &field.type_info {
-                                luao_resolver::LuaoType::Class(class_id) => {
-                                    for (cname, csym) in &emitter.symbol_table.classes {
-                                        if csym.id == *class_id {
-                                            result = Some(cname.clone());
-                                            break;
-                                        }
-                                    }
-                                }
-                                // Cross-file: type was unresolved at resolve time,
-                                // but may now be available in the merged symbol table
-                                luao_resolver::LuaoType::TypeParam(name) => {
-                                    if emitter.symbol_table.classes.contains_key(name) {
-                                        result = Some(name.clone());
-                                    }
-                                }
-                                _ => {}
-                            }
-                            break;
-                        }
-                    }
-                }
-                result
-            };
-            if let Some(cname) = field_class {
-                if is_extern_member(&emitter.symbol_table, &cname, member_name) {
+            let field_name = fa.field.name.as_str();
+            if let Some(field_type) = resolve_field_type(emitter, &owner_type, field_name) {
+                if is_extern_member(&emitter.symbol_table, &field_type, member_name) {
                     return member_name.to_string();
                 }
-                return emitter.mangle_member(&cname, member_name);
+                return emitter.mangle_member(&field_type, member_name);
             }
         }
     }
@@ -422,37 +392,55 @@ fn resolve_expression_type(emitter: &Emitter, expr: &Expression) -> Option<Strin
             }
             emitter.local_var_types.get(name).cloned()
         }
-        // self.field or var.field — resolve field type from owner's class
+        // self.field or var.field — resolve field type from owner's class/interface
         Expression::FieldAccess(fa) => {
             let owner_type = resolve_expression_type(emitter, &fa.object)?;
-            let class = emitter.symbol_table.classes.get(&owner_type)?;
-            let field_name = fa.field.name.as_str();
-            for field in &class.fields {
-                if field.name == field_name {
-                    match &field.type_info {
-                        luao_resolver::LuaoType::Class(class_id) => {
-                            for (cname, csym) in &emitter.symbol_table.classes {
-                                if csym.id == *class_id {
-                                    return Some(cname.clone());
-                                }
-                            }
-                        }
-                        // Cross-file: type was unresolved at resolve time,
-                        // but may now be available in the merged symbol table
-                        luao_resolver::LuaoType::TypeParam(name) => {
-                            if emitter.symbol_table.classes.contains_key(name) {
-                                return Some(name.clone());
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            None
+            resolve_field_type(emitter, &owner_type, fa.field.name.as_str())
         }
         // new Foo() — type is Foo
         Expression::NewExpr(ne) => {
             Some(ne.class_name.name.name.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Given an owner type and a field name, resolve the field's type from the symbol table.
+/// Works for both classes and interfaces.
+fn resolve_field_type(emitter: &Emitter, owner_type: &str, field_name: &str) -> Option<String> {
+    if let Some(fields) = emitter.lookup_type_fields(owner_type) {
+        for field in fields {
+            if field.name == field_name {
+                return resolve_luao_type(emitter, &field.type_info);
+            }
+        }
+    }
+    None
+}
+
+/// Resolve a LuaoType to a type name string, checking both classes and interfaces.
+fn resolve_luao_type(emitter: &Emitter, ty: &luao_resolver::LuaoType) -> Option<String> {
+    match ty {
+        luao_resolver::LuaoType::Class(id) => {
+            for (name, sym) in &emitter.symbol_table.classes {
+                if sym.id == *id { return Some(name.clone()); }
+            }
+            None
+        }
+        luao_resolver::LuaoType::Interface(id) => {
+            for (name, sym) in &emitter.symbol_table.interfaces {
+                if sym.id == *id { return Some(name.clone()); }
+            }
+            None
+        }
+        luao_resolver::LuaoType::TypeParam(name) => {
+            if emitter.symbol_table.classes.contains_key(name)
+                || emitter.symbol_table.interfaces.contains_key(name)
+            {
+                Some(name.clone())
+            } else {
+                None
+            }
         }
         _ => None,
     }

@@ -1066,7 +1066,16 @@ impl Parser {
         self.expect(TokenKind::For)?;
         let name = self.expect_identifier()?;
 
-        if self.check(TokenKind::Assign) {
+        // ':' after first name means type annotation → must be generic for
+        // '=' after first name means numeric for
+        let first_type = if self.check(TokenKind::Colon) {
+            self.advance();
+            Some(self.parse_type_annotation()?)
+        } else {
+            None
+        };
+
+        if first_type.is_none() && self.check(TokenKind::Assign) {
             self.advance();
             let start_expr = self.parse_expression()?;
             self.expect(TokenKind::Comma)?;
@@ -1091,10 +1100,17 @@ impl Parser {
                 span: start.merge(end),
             }))
         } else {
-            let mut names = vec![name];
+            let mut names = vec![(name, first_type)];
             while self.check(TokenKind::Comma) {
                 self.advance();
-                names.push(self.expect_identifier()?);
+                let n = self.expect_identifier()?;
+                let ta = if self.check(TokenKind::Colon) {
+                    self.advance();
+                    Some(self.parse_type_annotation()?)
+                } else {
+                    None
+                };
+                names.push((n, ta));
             }
             self.expect(TokenKind::In)?;
             let iterators = self.parse_expression_list()?;

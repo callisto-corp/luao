@@ -11,19 +11,21 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
             let names: Vec<_> = la.names.iter().map(|n| emitter.rename_decl(&n.name)).collect();
 
             // Track variable types — first explicit type wins, then infer from RHS
+            // Keys use ORIGINAL names (pre-rename) since lookups come from AST identifiers
             for (i, name_id) in la.names.iter().enumerate() {
-                let var_name = emitter.rename_decl(&name_id.name);
-                // 1. Explicit type annotation: local x: Foo
+                let original_name = name_id.name.to_string();
+                // 1. Explicit type annotation: local x: Foo — always wins over inference
                 if let Some(Some(ta)) = la.type_annotations.get(i) {
                     if let Some(tn) = resolve_type_name(emitter, ta) {
-                        emitter.local_var_types.insert(var_name, tn);
-                        continue;
+                        emitter.local_var_types.insert(original_name, tn);
                     }
+                    // Any explicit annotation (even `any`, `number`, etc.) blocks inference
+                    continue;
                 }
                 // 2. Infer from RHS: cast, new, or method return type
                 if let Some(val) = la.values.get(i) {
                     if let Some(inferred) = infer_type_from_expr(emitter, val) {
-                        emitter.local_var_types.insert(var_name, inferred);
+                        emitter.local_var_types.insert(original_name, inferred);
                     }
                 }
             }
@@ -40,9 +42,9 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
                 let mut values = Vec::new();
                 for (idx, v) in la.values.iter().enumerate() {
                     // If this value is a table constructor and the var has a known type, set context
-                    let var_name = la.names.get(idx).map(|n| emitter.rename_decl(&n.name));
+                    let original_var_name = la.names.get(idx).map(|n| n.name.to_string());
                     let saved = emitter.table_target_type.take();
-                    if let Some(ref vn) = var_name {
+                    if let Some(ref vn) = original_var_name {
                         if let Some(type_name) = emitter.local_var_types.get(vn).cloned() {
                             if matches!(v, luao_parser::Expression::TableConstructor(_)) {
                                 emitter.table_target_type = Some(type_name);
@@ -95,8 +97,7 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
                 if let luao_parser::Expression::Identifier(id) = target {
                     if let Some(val) = assign.values.get(i) {
                         if let Some(inferred) = infer_type_from_expr(emitter, val) {
-                            let var_name = emitter.rename(&id.name);
-                            emitter.local_var_types.insert(var_name, inferred);
+                            emitter.local_var_types.insert(id.name.to_string(), inferred);
                         }
                     }
                 }
@@ -212,12 +213,28 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
         Statement::ForGeneric(f) => {
             let saved_switch = emitter.in_switch_case;
             emitter.in_switch_case = false;
-            let names: Vec<_> = f.names.iter().map(|n| n.name.to_string()).collect();
+            let saved_var_types = emitter.local_var_types.clone();
+            let names: Vec<_> = f.names.iter().map(|(n, _)| n.name.to_string()).collect();
             let iters: Vec<_> = f
                 .iterators
                 .iter()
                 .map(|i| emit_expression(emitter, i))
                 .collect();
+
+            // Track loop variable types: explicit annotations first, then infer from iterator.
+            // If a variable has ANY explicit annotation (even `any`), inference is skipped for it.
+            let mut has_explicit: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for (name, ta) in &f.names {
+                if let Some(ta) = ta {
+                    has_explicit.insert(name.name.to_string());
+                    if let Some(tn) = resolve_type_name(emitter, ta) {
+                        emitter.local_var_types.insert(name.name.to_string(), tn);
+                    }
+                }
+            }
+            // Infer from iterator only for variables without explicit annotations
+            infer_for_generic_types(emitter, f, &has_explicit);
+
             emitter.writeln(&format!(
                 "for {} in {} do",
                 names.join(", "),
@@ -225,6 +242,7 @@ pub fn emit_statement(emitter: &mut Emitter, stmt: &Statement) {
             ));
             emitter.emit_block(&f.body);
             emitter.writeln("end");
+            emitter.local_var_types = saved_var_types;
             emitter.in_switch_case = saved_switch;
         }
         Statement::SwitchStatement(sw) => {
@@ -327,6 +345,157 @@ fn emit_function_name(emitter: &Emitter, fd: &luao_parser::FunctionDecl) -> Stri
 }
 
 /// Resolve a type annotation to a class/interface name if it refers to a known type.
+/// Resolve the return type of a method on a class or interface.
+fn resolve_method_return_type(emitter: &Emitter, type_name: &str, method_name: &str) -> Option<String> {
+    if let Some(methods) = emitter.lookup_type_methods(type_name) {
+        for method in methods {
+            if method.name == method_name {
+                return resolve_return_type(emitter, &method.return_type);
+            }
+        }
+    }
+    None
+}
+
+/// Resolve a LuaoType to a type name, checking both classes and interfaces.
+fn resolve_return_type(emitter: &Emitter, ty: &luao_resolver::LuaoType) -> Option<String> {
+    match ty {
+        luao_resolver::LuaoType::Class(id) => {
+            for (name, sym) in &emitter.symbol_table.classes {
+                if sym.id == *id { return Some(name.clone()); }
+            }
+            None
+        }
+        luao_resolver::LuaoType::Interface(id) => {
+            for (name, sym) in &emitter.symbol_table.interfaces {
+                if sym.id == *id { return Some(name.clone()); }
+            }
+            None
+        }
+        luao_resolver::LuaoType::TypeParam(name) => {
+            if emitter.symbol_table.classes.contains_key(name)
+                || emitter.symbol_table.interfaces.contains_key(name)
+            {
+                Some(name.clone())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Infer loop variable types from the iterator expression in a for-generic loop.
+/// Handles: `for k, v in expr`, `for k, v in next, expr`, `for k, v in pairs(expr)`.
+/// Only sets types for variables that don't already have an explicit annotation.
+fn infer_for_generic_types(emitter: &mut Emitter, f: &luao_parser::ForGenericStatement, has_explicit: &std::collections::HashSet<String>) {
+    // The value variable is typically the last name (or second if there's a key)
+    let value_idx = if f.names.len() >= 2 { 1 } else { 0 };
+    let value_name = f.names[value_idx].0.name.to_string();
+
+    // Skip if has an explicit type annotation (even `any`)
+    if has_explicit.contains(&value_name) {
+        return;
+    }
+
+    // Try to find the iterable expression and resolve its element type
+    let iterable = resolve_for_iterable(f);
+    if let Some(iterable_expr) = iterable {
+        if let Some(element_type) = resolve_iterable_element_type(emitter, iterable_expr) {
+            emitter.local_var_types.insert(value_name, element_type);
+        }
+    }
+}
+
+/// Extract the iterable expression from a for-generic iterator list.
+/// Handles: `expr` (direct), `next, expr`, `pairs(expr)`, `ipairs(expr)`, `next(expr)`.
+fn resolve_for_iterable<'a>(f: &'a luao_parser::ForGenericStatement) -> Option<&'a luao_parser::Expression> {
+    if f.iterators.is_empty() {
+        return None;
+    }
+
+    let first = &f.iterators[0];
+
+    // `for k, v in next, expr` — two iterators, first is `next`
+    if f.iterators.len() >= 2 {
+        if let luao_parser::Expression::Identifier(id) = first {
+            if id.name == "next" {
+                return Some(&f.iterators[1]);
+            }
+        }
+    }
+
+    // `for k, v in pairs(expr)` / `ipairs(expr)` / `next(expr)`
+    if let luao_parser::Expression::FunctionCall(call) = first {
+        if let luao_parser::Expression::Identifier(id) = &call.callee {
+            if matches!(id.name.as_str(), "pairs" | "ipairs" | "next") {
+                if let Some(arg) = call.args.first() {
+                    return Some(arg);
+                }
+            }
+        }
+    }
+
+    // `for k, v in expr` — bare expression (iterates directly)
+    Some(first)
+}
+
+/// Given an iterable expression, resolve the element type of its array/table type.
+fn resolve_iterable_element_type(emitter: &Emitter, expr: &luao_parser::Expression) -> Option<String> {
+    // Resolve the type of the expression
+    let type_name = match expr {
+        luao_parser::Expression::Identifier(id) => {
+            let name = id.name.as_str();
+            if name == "self" {
+                emitter.current_class.clone()
+            } else {
+                emitter.local_var_types.get(name).cloned()
+            }
+        }
+        luao_parser::Expression::FieldAccess(fa) => {
+            // self.field or var.field — resolve field type, then check if it's an array
+            if let Some(owner_type) = resolve_iterable_owner_type(emitter, &fa.object) {
+                resolve_field_array_element(emitter, &owner_type, fa.field.name.as_str())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    // If the type is known, check if it's actually an array type in the symbol table
+    // (the type itself might be the element type if resolved from an array field)
+    type_name
+}
+
+/// Resolve the type of an expression for iterable lookups.
+fn resolve_iterable_owner_type(emitter: &Emitter, expr: &luao_parser::Expression) -> Option<String> {
+    match expr {
+        luao_parser::Expression::Identifier(id) => {
+            if id.name.as_str() == "self" {
+                emitter.current_class.clone()
+            } else {
+                emitter.local_var_types.get(id.name.as_str()).cloned()
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Look up a field on a type and if it's an Array type, return the element type name.
+fn resolve_field_array_element(emitter: &Emitter, owner_type: &str, field_name: &str) -> Option<String> {
+    if let Some(fields) = emitter.lookup_type_fields(owner_type) {
+        for field in fields {
+            if field.name == field_name {
+                if let luao_resolver::LuaoType::Array(inner) = &field.type_info {
+                    return resolve_return_type(emitter, inner);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn resolve_type_name(emitter: &Emitter, ta: &luao_parser::TypeAnnotation) -> Option<String> {
     if let luao_parser::TypeKind::Named(ref type_name, _) = ta.kind {
         let tn = type_name.name.to_string();
@@ -347,7 +516,7 @@ fn infer_type_from_expr(emitter: &Emitter, expr: &luao_parser::Expression) -> Op
         luao_parser::Expression::CastExpr(cast) => {
             if let luao_parser::TypeKind::Named(ref type_name, _) = cast.target_type.kind {
                 let tn = type_name.name.to_string();
-                if emitter.is_class(&tn) {
+                if emitter.is_type(&tn) {
                     return Some(tn);
                 }
             }
@@ -359,7 +528,6 @@ fn infer_type_from_expr(emitter: &Emitter, expr: &luao_parser::Expression) -> Op
         }
         // `obj:method()` — check method return type in symbol table
         luao_parser::Expression::MethodCall(mc) => {
-            // Resolve the object's type
             let obj_type = match &mc.object {
                 luao_parser::Expression::Identifier(id) => {
                     let name = id.name.as_str();
@@ -371,29 +539,8 @@ fn infer_type_from_expr(emitter: &Emitter, expr: &luao_parser::Expression) -> Op
                 }
                 _ => None,
             };
-            if let Some(class_name) = obj_type {
-                if let Some(class) = emitter.symbol_table.classes.get(&class_name) {
-                    let method_name = mc.method.name.as_str();
-                    for method in &class.methods {
-                        if method.name == method_name {
-                            match &method.return_type {
-                                luao_resolver::LuaoType::Class(class_id) => {
-                                    for (cname, csym) in &emitter.symbol_table.classes {
-                                        if csym.id == *class_id {
-                                            return Some(cname.clone());
-                                        }
-                                    }
-                                }
-                                luao_resolver::LuaoType::TypeParam(name) => {
-                                    if emitter.symbol_table.classes.contains_key(name) {
-                                        return Some(name.clone());
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
+            if let Some(type_name) = obj_type {
+                return resolve_method_return_type(emitter, &type_name, mc.method.name.as_str());
             }
             None
         }
@@ -401,29 +548,7 @@ fn infer_type_from_expr(emitter: &Emitter, expr: &luao_parser::Expression) -> Op
         luao_parser::Expression::FunctionCall(call) => {
             if let luao_parser::Expression::FieldAccess(fa) = &call.callee {
                 if let luao_parser::Expression::Identifier(id) = &fa.object {
-                    let class_name = id.name.to_string();
-                    if let Some(class) = emitter.symbol_table.classes.get(&class_name) {
-                        let method_name = fa.field.name.as_str();
-                        for method in &class.methods {
-                            if method.name == method_name {
-                                match &method.return_type {
-                                    luao_resolver::LuaoType::Class(class_id) => {
-                                        for (cname, csym) in &emitter.symbol_table.classes {
-                                            if csym.id == *class_id {
-                                                return Some(cname.clone());
-                                            }
-                                        }
-                                    }
-                                    luao_resolver::LuaoType::TypeParam(name) => {
-                                        if emitter.symbol_table.classes.contains_key(name) {
-                                            return Some(name.clone());
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
+                    return resolve_method_return_type(emitter, &id.name, fa.field.name.as_str());
                 }
             }
             None

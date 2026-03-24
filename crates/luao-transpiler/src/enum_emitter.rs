@@ -6,6 +6,7 @@ use crate::expression_emitter::emit_expression;
 pub fn emit_enum(emitter: &mut Emitter, enum_decl: &EnumDecl) {
     emitter.needs_enum_freeze = true;
     let name = emitter.rename_decl(&enum_decl.name.name);
+    let original_enum_name = enum_decl.name.name.to_string();
 
     let mut entries = Vec::new();
     let mut reverse_entries = Vec::new();
@@ -16,7 +17,7 @@ pub fn emit_enum(emitter: &mut Emitter, enum_decl: &EnumDecl) {
         let output_name = if variant.is_extern {
             original_name.clone()
         } else {
-            emitter.mangle_member(&name, &original_name)
+            emitter.mangle_member(&original_enum_name, &original_name)
         };
         let value = if let Some(expr) = &variant.value {
             let val_str = emit_expression(emitter, expr);

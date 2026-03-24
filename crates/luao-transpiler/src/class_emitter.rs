@@ -6,12 +6,14 @@ use crate::expression_emitter::emit_expression;
 
 pub fn emit_class(emitter: &mut Emitter, class: &ClassDecl) {
     let class_name = emitter.rename_decl(&class.name.name);
+    let original_class_name = class.name.name.to_string();
     let parent_name = class
         .parent
         .as_ref()
         .map(|p| emitter.rename(&p.name.name));
 
-    emitter.current_class = Some(class_name.clone());
+    // current_class uses the ORIGINAL name for mangling and symbol table lookups
+    emitter.current_class = Some(original_class_name.clone());
     emitter.current_class_parent = parent_name.clone();
 
     let local_prefix = if emitter.should_skip_local() || emitter.is_exported(&class_name) { "" } else { "local " };
@@ -26,7 +28,7 @@ pub fn emit_class(emitter: &mut Emitter, class: &ClassDecl) {
     emitter.writeln(&format!("{}.__index = {}", class_name, class_name));
     emitter.newline();
 
-    emit_properties(emitter, class, &class_name);
+    emit_properties(emitter, class, &class_name, &original_class_name);
 
     let has_constructor = class.members.iter().any(|m| matches!(m, ClassMember::Constructor(_)));
 
@@ -34,7 +36,7 @@ pub fn emit_class(emitter: &mut Emitter, class: &ClassDecl) {
         match member {
             ClassMember::Field(field) => {
                 if field.is_static {
-                    let field_name = member_output_name(emitter, &class_name, &field.name.name, field.access, field.is_extern || class.is_extern);
+                    let field_name = member_output_name(emitter, &original_class_name, &field.name.name, field.access, field.is_extern || class.is_extern);
                     if let Some(ref val) = field.default_value {
                         let v = emit_expression(emitter, val);
                         emitter.writeln(&format!("{}.{} = {}", class_name, field_name, v));
@@ -44,10 +46,10 @@ pub fn emit_class(emitter: &mut Emitter, class: &ClassDecl) {
                 }
             }
             ClassMember::Constructor(ctor) => {
-                emit_constructor(emitter, class, ctor, &class_name, &parent_name);
+                emit_constructor(emitter, class, ctor, &class_name, &original_class_name, &parent_name);
             }
             ClassMember::Method(method) => {
-                emit_method(emitter, method, &class_name, &parent_name, class.is_extern);
+                emit_method(emitter, method, &class_name, &original_class_name, &parent_name, class.is_extern);
             }
             ClassMember::Property(_) => {}
         }
@@ -55,7 +57,7 @@ pub fn emit_class(emitter: &mut Emitter, class: &ClassDecl) {
 
     // Generate default constructor if none was declared
     if !has_constructor {
-        emit_default_constructor(emitter, class, &class_name, &parent_name);
+        emit_default_constructor(emitter, class, &class_name, &original_class_name, &parent_name);
     }
 
     emitter.current_class = None;
@@ -68,6 +70,7 @@ fn emit_constructor(
     class: &ClassDecl,
     ctor: &luao_parser::ConstructorDecl,
     class_name: &str,
+    original_class_name: &str,
     parent_name: &Option<String>,
 ) {
     let params = emitter.emit_params(&ctor.params);
@@ -82,7 +85,7 @@ fn emit_constructor(
         if let Some(ref ta) = param.type_annotation {
             if let luao_parser::TypeKind::Named(ref type_name, _) = ta.kind {
                 let tn = type_name.name.to_string();
-                if emitter.is_class(&tn) {
+                if emitter.is_type(&tn) {
                     emitter.local_var_types.insert(param.name.name.to_string(), tn);
                 }
             }
@@ -183,6 +186,7 @@ fn emit_default_constructor(
     emitter: &mut Emitter,
     class: &ClassDecl,
     class_name: &str,
+    _original_class_name: &str,
     parent_name: &Option<String>,
 ) {
     let new_name = if class.is_extern { "new".to_string() } else { emitter.mangle_shared("new") };
@@ -216,12 +220,12 @@ fn emit_default_constructor(
 }
 
 fn emit_default_fields(emitter: &mut Emitter, class: &ClassDecl) {
-    let class_name = emitter.rename_decl(&class.name.name);
+    let original_class_name = class.name.name.to_string();
     for member in &class.members {
         if let ClassMember::Field(field) = member {
             if !field.is_static {
                 if let Some(ref val) = field.default_value {
-                    let field_name = member_output_name(emitter, &class_name, &field.name.name, field.access, field.is_extern || class.is_extern);
+                    let field_name = member_output_name(emitter, &original_class_name, &field.name.name, field.access, field.is_extern || class.is_extern);
                     let v = emit_expression(emitter, val);
                     emitter.writeln(&format!("self.{} = {}", field_name, v));
                 }
@@ -245,11 +249,12 @@ fn emit_method(
     emitter: &mut Emitter,
     method: &luao_parser::MethodDecl,
     class_name: &str,
+    original_class_name: &str,
     parent_name: &Option<String>,
     class_is_extern: bool,
 ) {
     let original_name = method.name.name.to_string();
-    let method_name = member_output_name(emitter, class_name, &original_name, method.access, method.is_extern || class_is_extern);
+    let method_name = member_output_name(emitter, original_class_name, &original_name, method.access, method.is_extern || class_is_extern);
     let params = emitter.emit_params(&method.params);
 
     let is_operator = original_name.starts_with("__");
@@ -314,7 +319,7 @@ fn emit_method(
             if let Some(ref ta) = param.type_annotation {
                 if let luao_parser::TypeKind::Named(ref type_name, _) = ta.kind {
                     let tn = type_name.name.to_string();
-                    if emitter.is_class(&tn) {
+                    if emitter.is_type(&tn) {
                         emitter.local_var_types.insert(param.name.name.to_string(), tn);
                     }
                 }
@@ -348,7 +353,7 @@ fn emit_method(
 
 /// Emit properties as compile-time methods. Non-extern properties become __get_/set_ methods.
 /// Extern properties keep the runtime __index/__newindex interceptor approach for external compatibility.
-fn emit_properties(emitter: &mut Emitter, class: &ClassDecl, class_name: &str) {
+fn emit_properties(emitter: &mut Emitter, class: &ClassDecl, class_name: &str, original_class_name: &str) {
     let mut extern_getters: Vec<String> = Vec::new();
     let mut extern_setters: Vec<String> = Vec::new();
 
@@ -382,7 +387,7 @@ fn emit_properties(emitter: &mut Emitter, class: &ClassDecl, class_name: &str) {
             if let Some(ref getter_body) = prop.getter {
                 let method_name = unique_getter_name(&prop_name, &method_names);
                 emitter.property_getters.insert(
-                    (class_name.to_string(), prop_name.clone()),
+                    (original_class_name.to_string(), prop_name.clone()),
                     method_name.clone(),
                 );
                 emitter.writeln(&format!("function {}:{}()", class_name, method_name));
@@ -393,7 +398,7 @@ fn emit_properties(emitter: &mut Emitter, class: &ClassDecl, class_name: &str) {
             if let Some((ref param, ref setter_body)) = prop.setter {
                 let method_name = unique_setter_name(&prop_name, &method_names);
                 emitter.property_setters.insert(
-                    (class_name.to_string(), prop_name.clone()),
+                    (original_class_name.to_string(), prop_name.clone()),
                     method_name.clone(),
                 );
                 emitter.writeln(&format!(
@@ -420,7 +425,7 @@ fn emit_properties(emitter: &mut Emitter, class: &ClassDecl, class_name: &str) {
                     let prop_name = output_field_name(&prop.name.name, prop.access);
                     let getter_method = emitter
                         .property_getters
-                        .get(&(class_name.to_string(), prop.name.name.to_string()))
+                        .get(&(original_class_name.to_string(), prop.name.name.to_string()))
                         .cloned()
                         .unwrap_or_else(|| format!("__get_{}", prop_name));
                     emitter.writeln(&format!(
@@ -453,7 +458,7 @@ fn emit_properties(emitter: &mut Emitter, class: &ClassDecl, class_name: &str) {
                         let prop_name = output_field_name(&prop.name.name, prop.access);
                         let setter_method = emitter
                             .property_setters
-                            .get(&(class_name.to_string(), prop.name.name.to_string()))
+                            .get(&(original_class_name.to_string(), prop.name.name.to_string()))
                             .cloned()
                             .unwrap_or_else(|| format!("__set_{}", prop_name));
                         emitter.writeln(&format!(

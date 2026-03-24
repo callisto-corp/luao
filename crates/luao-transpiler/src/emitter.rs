@@ -221,14 +221,35 @@ impl Emitter {
             .and_then(|m| m.lookup(type_name, member_name))
     }
 
+    /// Resolve a potentially-renamed type name to its original name for symbol table lookups.
+    /// In bundled mode, identifiers may be renamed (e.g. "CameraLock0"), but the symbol table
+    /// uses original names. This is a safety net — most paths already use original names.
+    pub fn resolve_original_type_name<'a>(&'a self, name: &'a str) -> &'a str {
+        if self.symbol_table.classes.contains_key(name)
+            || self.symbol_table.interfaces.contains_key(name)
+            || self.symbol_table.enums.contains_key(name)
+        {
+            return name;
+        }
+        // Reverse lookup: find original name from local_renames (original → renamed)
+        for (original, renamed) in &self.local_renames {
+            if renamed == name {
+                return original;
+            }
+        }
+        name
+    }
+
     /// Check if a name refers to a known class in the symbol table.
     pub fn is_class(&self, name: &str) -> bool {
-        self.symbol_table.classes.contains_key(name)
+        let resolved = self.resolve_original_type_name(name);
+        self.symbol_table.classes.contains_key(resolved)
     }
 
     /// Check if a name refers to a known interface in the symbol table.
     pub fn is_interface(&self, name: &str) -> bool {
-        self.symbol_table.interfaces.contains_key(name)
+        let resolved = self.resolve_original_type_name(name);
+        self.symbol_table.interfaces.contains_key(resolved)
     }
 
     /// Check if a name refers to a known class or interface.
@@ -238,7 +259,32 @@ impl Emitter {
 
     /// Check if a name refers to a known enum in the symbol table.
     pub fn is_enum(&self, name: &str) -> bool {
-        self.symbol_table.enums.contains_key(name)
+        let resolved = self.resolve_original_type_name(name);
+        self.symbol_table.enums.contains_key(resolved)
+    }
+
+    /// Look up fields for a type name (class or interface).
+    pub fn lookup_type_fields(&self, name: &str) -> Option<&[luao_resolver::FieldSymbol]> {
+        let resolved = self.resolve_original_type_name(name);
+        if let Some(class) = self.symbol_table.classes.get(resolved) {
+            return Some(&class.fields);
+        }
+        if let Some(iface) = self.symbol_table.interfaces.get(resolved) {
+            return Some(&iface.fields);
+        }
+        None
+    }
+
+    /// Look up methods for a type name (class or interface).
+    pub fn lookup_type_methods(&self, name: &str) -> Option<&[luao_resolver::MethodSymbol]> {
+        let resolved = self.resolve_original_type_name(name);
+        if let Some(class) = self.symbol_table.classes.get(resolved) {
+            return Some(&class.methods);
+        }
+        if let Some(iface) = self.symbol_table.interfaces.get(resolved) {
+            return Some(&iface.methods);
+        }
+        None
     }
 
     /// Check if a name is exported (should skip `local` in bundled output).

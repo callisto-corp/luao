@@ -328,7 +328,7 @@ pub struct ForNumericStatement {
 
 #[derive(Debug, Clone)]
 pub struct ForGenericStatement {
-    pub names: Vec<Identifier>,
+    pub names: Vec<(Identifier, Option<TypeAnnotation>)>,
     pub iterators: Vec<Expression>,
     pub body: Block,
     pub span: Span,

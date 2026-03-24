@@ -227,15 +227,13 @@ pub fn bundle(entrypoint: &Path, options: &TranspileOptions) -> Result<BundleRes
             let needs_async = emitter.needs_async;
             let needs_array = emitter.needs_array;
             let needs_tuple = emitter.needs_tuple;
-            // Carry forward type info only for exported names
-            let exported_set: std::collections::HashSet<&str> = module.exports.iter().map(|s| s.as_str()).collect();
-            for name in &defines {
-                if exported_set.contains(name.as_str()) {
-                    if let Some(v) = emitter.local_var_types.get(name) {
-                        // Store under the final (possibly renamed) export name
-                        let final_name = rename_map.get(name).cloned().unwrap_or_else(|| name.clone());
-                        exported_var_types.insert(final_name, v.clone());
-                    }
+            // Carry forward type info only for exported names.
+            // local_var_types uses original (pre-rename) names as keys.
+            // exported_var_types uses final renamed names as keys.
+            for export_name in &module.exports {
+                if let Some(v) = emitter.local_var_types.get(export_name) {
+                    let final_name = rename_map.get(export_name).cloned().unwrap_or_else(|| export_name.clone());
+                    exported_var_types.insert(final_name, v.clone());
                 }
             }
             shared_mangler = emitter.mangler.take();
